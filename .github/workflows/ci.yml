@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: verify release checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x bin/zimaflow scripts/install.sh tests/smoke.sh examples/demo/run-demo.sh
+
+      - name: CLI version
+        run: bin/zimaflow --version
+
+      - name: Installer help
+        run: scripts/install.sh --help
+
+      - name: Smoke tests
+        run: tests/smoke.sh
+
+      - name: Demo walkthrough
+        run: examples/demo/run-demo.sh
+
+      - name: Secret / local-path scan
+        run: |
+          # 公开仓不应出现本机绝对路径。命中即失败。
+          # 要求斜杠后跟真实用户名字符，放过文档里的占位符（/Users/... 、/home/<name>/）。
+          if grep -rInE '/Users/[A-Za-z0-9_]|/home/[a-z0-9_][a-z0-9_-]*/' \
+              README.md AGENTS.md CHANGELOG.md \
+              docs skills rules references examples scripts bin tests \
+              CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md \
+              .github/PULL_REQUEST_TEMPLATE.md .github/ISSUE_TEMPLATE 2>/dev/null; then
+            echo "::error::检测到本机路径，请脱敏后再提交"
+            exit 1
+          fi
+          echo "脱敏扫描通过：无本机路径命中。"
+
+      - name: Internal link check
+        run: |
+          # 检查 markdown 内部相对链接指向的文件是否存在。
+          status=0
+          while IFS= read -r f; do
+            dir="$(dirname "$f")"
+            grep -oE '\]\(([^)#][^)]*)\)' "$f" | sed -E 's/^\]\(//; s/\)$//' | while read -r link; do
+              case "$link" in
+                http*|mailto*|'#'*) continue ;;
+              esac
+              target="${link%%#*}"
+              [ -z "$target" ] && continue
+              if [ ! -e "$dir/$target" ] && [ ! -e "$target" ]; then
+                echo "::error file=$f::断链: $link"
+                exit 1
+              fi
+            done || status=1
+          done < <(find README.md docs examples -name '*.md' 2>/dev/null)
+          [ "$status" -eq 0 ] && echo "链接检查通过。"
+          exit "$status"

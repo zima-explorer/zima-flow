@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="0.1.0"
+
+usage() {
+  cat <<'EOF'
+zimaflow - lightweight workflow guardrails
+
+用法：
+  zimaflow close [--json]
+  zimaflow install-hooks
+  zimaflow --help
+  zimaflow --version
+
+命令：
+  close           运行轻量 session 收口检查。
+  close --json    输出稳定 JSON，供 agent 或工具读取。
+  install-hooks   在当前 git 仓库安装非阻断提醒 hooks。
+EOF
+}
+
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  printf '"%s"' "$value"
+}
+
+find_git_root() {
+  git rev-parse --show-toplevel 2>/dev/null || true
+}
+
+print_close_json() {
+  local repository="$1"
+  local git_status="$2"
+  local dirty_count="$3"
+  local next_action="$4"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"git_status":'; json_string "$git_status"; printf ','
+  printf '"dirty_count":%s,' "$dirty_count"
+  printf '"next_action":'; json_string "$next_action"
+  printf '}\n'
+}
+
+run_close() {
+  local format="${1:-human}"
+  local root
+  root="$(find_git_root)"
+
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      print_close_json "" "not_git_repo" 0 "need_manual_confirmation"
+      return 2
+    fi
+    cat <<'EOF'
+zimaflow close
+
+当前目录不是 git 仓库。
+下一步：need_manual_confirmation
+EOF
+    return 2
+  fi
+
+  local dirty_count
+  dirty_count="$(cd "$root" && git status --porcelain=v1 | wc -l | tr -d ' ')"
+
+  local git_status="clean"
+  local next_action="can_close"
+  if [ "$dirty_count" != "0" ]; then
+    git_status="dirty"
+    next_action="need_manual_confirmation"
+  fi
+
+  if [ "$format" = "json" ]; then
+    print_close_json "$root" "$git_status" "$dirty_count" "$next_action"
+    return 0
+  fi
+
+  cat <<EOF
+zimaflow close
+
+Repository: $root
+Git status: $git_status
+Dirty count: $dirty_count
+Next action: $next_action
+
+提醒：这是轻量检查。正式结束 AI session 前，如有不确定，请继续运行 session-close-reconciler。
+EOF
+}
+
+install_hooks() {
+  local root
+  root="$(find_git_root)"
+  [ -n "$root" ] || {
+    printf '错误：当前目录不是 git 仓库，无法安装 hooks。\n' >&2
+    return 2
+  }
+
+  local hooks_dir="$root/.git/hooks"
+  mkdir -p "$hooks_dir"
+
+  local hook
+  for hook in pre-commit pre-push; do
+    local hook_path="$hooks_dir/$hook"
+    if [ -f "$hook_path" ] && ! grep -q "zimaflow hook reminder" "$hook_path"; then
+      printf '跳过已有 hook：%s\n' "$hook_path"
+      continue
+    fi
+    cat > "$hook_path" <<'EOF'
+#!/usr/bin/env bash
+# zimaflow hook reminder
+echo "zimaflow: 提交或推送前，可运行 zimaflow close 做轻量收口检查。" >&2
+exit 0
+EOF
+    chmod +x "$hook_path"
+    printf '已安装 hook：%s\n' "$hook_path"
+  done
+}
+
+case "${1:-}" in
+  close)
+    case "${2:-}" in
+      "")
+        run_close human
+        ;;
+      --json)
+        run_close json
+        ;;
+      *)
+        printf '错误：未知 close 参数：%s\n' "$2" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  install-hooks)
+    [ "$#" -eq 1 ] || {
+      printf '错误：install-hooks 不支持额外参数。\n' >&2
+      exit 1
+    }
+    install_hooks
+    ;;
+  --help|-h|"")
+    usage
+    ;;
+  --version)
+    printf 'zimaflow %s\n' "$VERSION"
+    ;;
+  *)
+    printf '错误：未知命令：%s\n' "$1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

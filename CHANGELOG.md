@@ -18,7 +18,7 @@
 - **agent 规则**：`rules/`（Claude、Codex）下面向公开使用的最小规则片段。
 - **最小 CLI**：`bin/zimaflow`，提供 `close`、JSON 输出和 reminder-only git hook。
 - **基础安装脚本**：`scripts/install.sh`，仅复制公开仓内容，不做 OpenSpec 初始化、项目注册或项目文档目录创建。
-- **文档**：`docs/getting-started.md`、`docs/workflow-overview.md`、`docs/open-source-boundary.md`、`docs/release-checklist.md`。
+- **文档**：`docs/getting-started.md`、`docs/workflow-overview.md`、`docs/open-source-boundary.md`；面向维护者的 `RELEASING.md`。
 - **端到端 demo**：`examples/demo/`，无网络、无凭证，`run-demo.sh` 走通"需求 → handover"全过程。
 - **工程配置**：`LICENSE`（MIT）、`.gitignore`、`AGENTS.md`、`tests/smoke.sh`。
 

@@ -22,11 +22,12 @@
 - **端到端 demo**：`examples/demo/`，无网络、无凭证，`run-demo.sh` 走通"需求 → handover"全过程。
 - **工程配置**：`LICENSE`（MIT）、`.gitignore`、`AGENTS.md`、`tests/smoke.sh`。
 
-### 暂缓（后续版本提供）
+### 后续规划（计划提供）
 
-- `proto-review`：需要公开原型模板和示例资产后再纳入。
-- `legacy-project-onboarding`：存量项目冷启动，不属首次 demo 主链路。
-- 完整项目初始化器与完整 CLI：v0.1 只保留通用命令与基础安装。
+- `proto-review`：产品原型评审，需公开原型模板和示例资产后开放。
+- `legacy-project-onboarding`：存量项目冷启动与老项目认知底座。
+- 一键初始化器与完整 CLI（per-change 状态、知识淘汰复查、artifact 漂移检查）。
+- 知识使用闭环：留痕账本加淘汰复查。
 
 [Unreleased]: https://github.com/zima-explorer/zima-flow/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/zima-explorer/zima-flow/releases/tag/v0.1.0

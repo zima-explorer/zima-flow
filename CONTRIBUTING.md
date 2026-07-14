@@ -8,7 +8,7 @@
 
 - [`README.md`](README.md) — zimaflow 是什么、不是什么。
 - [`docs/workflow-overview.md`](docs/workflow-overview.md) — 主链路各阶段职责。
-- [`docs/open-source-boundary.md`](docs/open-source-boundary.md) — 哪些模块纳入、暂缓、重写或移除。
+- [`docs/open-source-boundary.md`](docs/open-source-boundary.md) — 哪些模块纳入、哪些属于后续规划。
 
 `proto-review`、`legacy-project-onboarding`、完整 installer 和完整 CLI 已明确标记为**后续提供**。请不要在 v0.1 里补齐它们，除非事先在 issue 中讨论并确认纳入。
 

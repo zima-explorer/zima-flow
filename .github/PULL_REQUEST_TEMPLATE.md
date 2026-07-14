@@ -22,7 +22,7 @@
 - [ ] 未引入本机路径（`/Users/...`、`/home/<name>/...`）
 - [ ] 未引入真实客户 / 雇主 / 私有项目 / 生产上下文
 - [ ] 如涉及"改 A 应同步 B"，已参考 `references/doc-sync-matrix.md` 更新相关文档
-- [ ] 未在 v0.1 里补齐已暂缓模块（`proto-review` / legacy onboarding / 完整 installer/CLI），或已在关联 issue 中确认
+- [ ] 未在 v0.1 里补齐后续规划模块（`proto-review` / legacy onboarding / 完整 installer/CLI），或已在关联 issue 中确认
 
 ## 关联 issue
 

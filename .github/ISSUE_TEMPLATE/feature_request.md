@@ -13,9 +13,9 @@ labels: enhancement
 
 希望 zimaflow 增加或改变什么。
 
-## 是否属于已暂缓模块
+## 是否属于后续规划模块
 
-请先查阅 `docs/open-source-boundary.md`。以下模块已明确标记为**后续提供**，若你的建议属于其中之一，请说明为什么应在 v0.1 之外单独讨论：
+请先查阅 `docs/open-source-boundary.md`。以下模块已列入**后续规划**，若你的建议属于其中之一，请说明为什么应在 v0.1 之外单独讨论：
 
 - [ ] `proto-review`（产品原型评审）
 - [ ] `legacy-project-onboarding`（存量项目冷启动）

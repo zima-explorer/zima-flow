@@ -19,7 +19,7 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 6. 在 session 之间交接上下文
 7. 通过文档对账和经验沉淀完成收口
 
-这个仓库是公开发行版。它比源工作区更小：这里只保留已审查的主链路。
+这个仓库是公开发行版，只保留经过发行审查的主链路，比完整开发流程更精简。
 
 ## v0.1 纳入内容
 
@@ -39,18 +39,19 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 | 基础安装脚本 | `scripts/install.sh` | 纳入 |
 | 最小 CLI | `bin/zimaflow` | 纳入 |
 
-## v0.1 暂不开放内容
+## 后续规划
 
-| 源模块 | v0.1 决策 | 原因 |
-|--------|-----------|------|
-| 完整项目初始化器 | 重写 | v0.1 基础安装脚本只安装公开仓内容，不初始化 OpenSpec、不维护项目注册表。 |
-| `legacy-project-onboarding` | 暂缓 | 有价值，但超出首次体验主链路。 |
-| `proto-review` | 暂缓 | 产品 UI 工作很有价值，但还需要独立的公开原型模板。 |
-| 完整 CLI | 重写 | v0.1 只保留 `close`、`close --json`、`install-hooks`、`--help`、`--version`。 |
-| knowledge ledger data | 移除 | 运行证据可能包含项目上下文，不作为示例数据发布。 |
-| 源工作区 README.md / 路线图笔记 | 重写/移除 | 含未发布路线历史和未审查参考资料。 |
+以下能力已完成开发与打磨，计划在后续版本随公开示例和稳定模板逐步开放：
 
-完整边界见 [docs/open-source-boundary.md](docs/open-source-boundary.md)。
+| 方向 | 亮点 |
+|------|------|
+| 产品原型评审（`proto-review`） | 想法或 PRD 一键转成可评审原型，先看得见再写 spec。 |
+| 老项目认知底座（`legacy-project-onboarding`） | 接手存量项目快速建立认知：架构、接口、数据模型一览。 |
+| 一键初始化器 | 一条命令接入新项目，自动配好 OpenSpec、规则和 skills。 |
+| 完整 CLI | 在 `close` 之外补上状态跟踪、知识淘汰复查和交接漂移检查。 |
+| 知识使用闭环 | 经验从"靠记忆"变成可追踪、可淘汰的账本。 |
+
+完整范围与规划见 [docs/open-source-boundary.md](docs/open-source-boundary.md)。
 
 ## 目录关系
 
@@ -93,7 +94,7 @@ scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"
 - 多数小需求用 brief 就够，不强制完整 PRD。
 - OpenSpec 负责规范层；完整模式的实现不应跳过规范上下文。
 - handover 和收口检查是工作流的一部分，不是事后补丁。
-- 公开发行文件必须脱敏，并且不依赖源工作区。
+- 公开发行文件必须脱敏，不依赖任何未公开的内部资源。
 
 ## 参与贡献
 

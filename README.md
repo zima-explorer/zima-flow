@@ -28,6 +28,42 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 
 这个仓库是公开发行版，只保留经过发行审查的主链路，比完整开发流程更精简。
 
+## 只要记住三件事
+
+zimaflow 的入口刻意保持低记忆负担：
+
+1. **从 `skills/sdd-router.md` 开始**：先判断这是轻量模式、完整模式、排障，还是需要纠偏 / rewind。
+2. **复杂需求进入 OpenSpec**：需求契约先落 brief/PRD，再由 `route-decision-recorder` 和 `openspec-superpowers-bridge` 接到 proposal/design/tasks。
+3. **结束前跑收口**：用 `bin/zimaflow close` 或 `session-close-reconciler` 对账 handover、closing、Guardrail 和经验候选，避免 session 只在聊天里结束。
+
+## 工作流一眼看懂
+
+![zimaflow v0.1 轻工作流概览](docs/assets/zimaflow-readme-flow.svg)
+
+这张图只保留 v0.1 主链路；完整协同全景图见延伸说明：[一张图看懂 AI Coding 轻工作流：从需求入口到经验回流](https://mp.weixin.qq.com/s/TqgHNpYo37qC0gvXOtuNCg)。
+
+## 可靠性机制
+
+zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的关键点显式化：
+
+- **需求 Gate**：`requirement-contract` 要求目标、范围、Non-goals、验收标准和默认假设先确认，降低后续实现偏航。
+- **路线 Gate**：完整模式通过 `route-decision-recorder` 记录路线选择、影响面和 first slice，避免 OpenSpec change 只是补文档。
+- **实现 Gate**：`spec-compliance-check` 对照 spec 检查实现，并标记 B4 破坏性变更和 B5 沿用抽象风险。
+- **交接 Gate**：`handover-manager` 保存下一次 session 必须知道的状态、未决事项和 Guardrail 承接。
+- **收口 Gate**：`session-close-reconciler` 在 final response 前核对 hotfix / rewind / secrets、文档同步和经验候选。
+
+这些 Gate 默认是提醒和审查，不是强制阻断；v0.1 的目标是让个人和小团队先得到可解释、可交接的纪律，而不是一开始就引入重型平台。
+
+## 可以从这里学到什么
+
+即使不直接采用整套流程，也可以拆开学习这些做法：
+
+- 如何把一句粗略需求压成 brief，并用 Given/When/Then 写出可派生测试的验收标准。
+- 如何决定轻量模式和完整模式的边界，让小改动不背重流程，大改动不跳过路线决策。
+- 如何把 OpenSpec 当作规范层，而不是把它变成事后归档。
+- 如何给存量项目建立 thin context index，让后续 agent session 少做重复考古。
+- 如何在 session 收尾时检查文档、handover、secrets 和经验候选，让上下文不只停留在对话窗口里。
+
 ## v0.1 纳入内容
 
 | 范围 | 文件 | 状态 |

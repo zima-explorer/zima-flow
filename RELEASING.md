@@ -6,7 +6,7 @@
 
 - [ ] 确认 release 目标是 `v0.1`。
 - [ ] 确认 release 包含一条完整主链路：需求进入、需求契约、任务拆解、OpenSpec/Superpowers bridge、合规检查、handover、session 收口和经验沉淀。
-- [ ] 确认后续规划模块仍标记为后续规划或后续提供，尤其是完整项目初始化器、`proto-review`、legacy onboarding 和完整 CLI 打包。
+- [ ] 确认后续规划模块仍标记为后续规划或后续提供，尤其是完整项目初始化器、`proto-review` 和完整 CLI 打包（`legacy-project-onboarding` 已纳入 v0.1）。
 
 ## 公开内容审查
 

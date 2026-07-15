@@ -3,7 +3,7 @@ name: sdd-router
 description: >
   开发流程入口路由。当用户描述一个新需求、新任务、新功能时触发。
   自动识别目标项目、判断需求规模、建议走完整模式（OpenSpec + Superpowers）或轻量模式（仅 Superpowers）。
-  触发词：新需求、新功能、做一个、实现、开发、改一下、加一个、修一个 bug、sdd-start。
+  触发词：新需求、新功能、做一个、实现、开发、改一下、加一个、修一个 bug、排查一下、定位原因、调试、报错、sdd-start。
 ---
 
 # SDD Router — 开发流程入口路由
@@ -16,12 +16,15 @@ description: >
 3. 按知识锚点加载相关经验
 4. 识别项目协作模式
 5. 识别需求形态
-6. 判断需求风险与复杂度
-7. 建议工作模式与扩展开关
-8. 检查需求契约是否已确认（未确认则引导到 requirement-contract）
-9. 判断是否需要先落路线决策文档
-10. 判断是否需要产品原型评审
-11. 初始化流程上下文
+6. 判断是否是问题排障 / 故障定位场景
+7. 判断需求风险与复杂度
+8. 判断需求变更影响级别（P1/P2/P3 change impact，如适用）
+9. 识别纠偏 / rewind（用户否定/回退当前理解时，回到上游产物修改，不新开需求）
+10. 建议工作模式与扩展开关
+11. 检查需求契约是否已确认（未确认则引导到 requirement-contract）
+12. 判断是否需要先落路线决策文档
+13. 判断是否需要产品原型评审
+14. 初始化流程上下文
 
 ## 执行步骤
 
@@ -86,6 +89,17 @@ cd <code_repo>
 
 ### Step 2：加载上下文
 
+优先检查项目文档目录下的 thin context index：
+
+```bash
+[ -f "<docs_dir>/.zimaflow/context-index.yaml" ] && cat "<docs_dir>/.zimaflow/context-index.yaml"
+```
+
+- 如果存在，先只读取 index，根据本轮需求选择 1-3 个相关文档继续读取；不要因为 index 存在就全量加载所有 baseline 文档。
+- 如果不存在，但项目是老项目 / 存量代码 / 用户说"接手老项目、项目考古、梳理架构、老项目叠加功能"，输出建议：
+  > Context Index：缺失。建议先运行 `legacy-project-onboarding` 生成轻量 code-intelligence baseline 和 `.zimaflow/context-index.yaml`；如本轮只是小修或紧急修复，可以跳过，但 handover 中记录待补。
+- 如果不存在且是新项目或简单低风险任务，不阻断，只在路由结果中标记"Context Index：无 / 不适用"。
+
 检查项目文档目录下是否有已有的 handover 文档：
 
 ```bash
@@ -96,6 +110,19 @@ ls <docs_dir>/  # 找最新的 *handover*.md
   > "上次的 [需求名] 还有未完成的工作：[遗留项摘要]。你想继续这个需求，还是开始新的？"
 - 如果用户说"继续"，读取该 handover 全文，恢复上下文，跳过后续路由步骤
 - 如果是新需求，继续 Step 3
+
+同时检查代码仓是否存在未关闭的 zimaflow state：
+
+```bash
+find <code_repo>/openspec/changes -maxdepth 3 -name .zimaflow-state.yaml 2>/dev/null
+```
+
+如果发现 state 文件且 `phase` 不是 `closed`，向用户提示：
+
+> 检测到未关闭的 OpenSpec change：{change_id}（phase: {phase}）。
+> 你想继续这个 change，还是开始新的需求？
+
+用户选择继续时，读取该 state 和最新 handover，恢复到对应阶段；用户选择新需求时，继续 Step 3，但不要改动旧 state。
 
 ### Step 2.5：知识锚点预加载
 
@@ -147,14 +174,31 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 | 产品型界面/流程 | 新页面、新一级菜单、新流程向导、多状态 UI、需要人类评审视觉和交互 | v0.1 可记录原型评审需求；自动 `proto-review` 后续提供 |
 | 跨系统/第三方集成 | 调用外部 API、账号映射、凭证处理、回调、字段序列化、外部契约 | 倾向完整模式；spec 必须写清身份字段、安全边界、Non-Goals、外部契约 |
 | 架构或产品路线变化 | 技术路线、模块边界、数据模型、产品范围或阶段目标发生变化 | 倾向完整模式；先触发 route-decision-recorder |
+| 问题排障 / 故障定位 | 报错、测试失败、线上异常、性能异常、集成失败、无法复现、用户说"排查/定位原因/看下为什么" | 先触发 `superpowers:systematic-debugging` 做根因调查；根因确认后再二次路由修复模式 |
 | 紧急热修复 | 线上故障、阻断发布、明确要求先止血 | 进入紧急热修复；修复后按协作模式补记录 |
+| 需求变更 | 用户在已有契约/decision/spec/tasks/实现过程中追加、撤销或改写需求 | 先判断 P1/P2/P3 change impact，再决定是否回退上游阶段 |
 
 特别规则：
 
+- 问题排障不是普通 bugfix。根因未确认前，不进入 `task-planning` / `requirement-contract` / OpenSpec，不先写修复方案；必须先使用 `superpowers:systematic-debugging` 完成复现、证据采集、根因假设和验证。
+- 如果排障后确认只是局部实现缺陷，再按轻量模式处理；如果根因影响需求契约、DTO/接口契约、状态机、权限、数据模型、跨系统集成或发布策略，再回到对应上游阶段（requirement-contract / route-decision-recorder / OpenSpec）。
 - 老项目叠加功能不自动等于完整模式；如果低风险、低复杂度，可仍走轻量模式，但必须先查参考实现。
 - 产品型界面/流程不自动等于完整模式；如果只是一处轻微 UI 调整，可轻量执行。若存在多状态、多角色、权限、敏感信息或团队评审需求，v0.1 先记录原型评审需求和待确认问题。
 - 跨系统/第三方集成不自动等于大改，但默认风险上调一级。
-- 紧急热修复优先修复；不要在止血前强制补完整流程。
+- 紧急热修复优先修复；不要在止血前强制补完整流程。进入紧急热修复时，先按下方 hotfix 严重度分档（P0/P1/P2）判断止血策略。
+
+**hotfix 严重度分档（P0/P1/P2 hotfix severity）**：
+
+> ⚠️ 命名区分：这里的 P0/P1/P2 是**热修复严重度**（线上影响有多严重、能否等），与 Step 5.5 的**需求变更影响级别 P1/P2/P3**（哪个已确认产物失效）是两套独立维度，不要混用。一次热修复既有 hotfix 严重度，也可能在事后补记录时触发 change impact 判断。
+
+| hotfix 严重度 | 判断信号 | 止血策略 |
+|--------------|---------|---------|
+| P0（完全不可用） | 核心功能全挂、用户完全无法使用、发布被阻断 | 先止血（回滚 / 关开关 / 降级），再定位根因；不追求一次改到位 |
+| P1（部分功能炸） | 部分功能异常但主流程可用、有临时绕过 | 快速修复，跳过完整需求/设计阶段，但必须补最小记录（改了什么、为什么、影响面） |
+| P2（边缘问题） | 边缘场景、低频、可延后 | 不当作热修复，退回正常流程（走 requirement-contract / 轻量模式），避免滥用 hotfix 绕过流程 |
+
+- P0/P1 止血后，都必须在收尾时把"事故现象、根因、修复提交、影响面、验证方式"交给 `handover-manager` 记录，并按现有 `learn` 候选流程沉淀经验；防止 hotfix 被当成长期绕过流程的捷径。
+- P2 不享受跳过流程的待遇：判为 P2 时明确告诉用户"这个不必走热修复"，回到正常路由。
 
 ### Step 5：判断需求风险与复杂度
 
@@ -184,6 +228,59 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 - **高风险** → 至少完整模式；如果涉及资损/隐私/合规/核心数据，后续应预留更强约束（如 Hook / Gate）
 - **拿不准时向上升级** → 宁可重一点，不要事后返工
 
+### Step 5.5：判断需求变更影响级别
+
+如果本轮是新需求，且没有已确认契约 / decision / OpenSpec / implementation 需要变更，本步骤输出"不适用"。
+
+如果用户在已有需求、设计、spec、tasks 或实现过程中提出变更，先判断 **P1/P2/P3 change impact**。这里的 P1/P2/P3 是需求变更影响级别，不是任务优先级。
+
+| 级别 | 判断信号 | 路由影响 |
+|------|---------|---------|
+| P1 | 只影响任务、局部实现、测试补充，不改变需求契约、路线决策或 OpenSpec 三件套 | 当前阶段内处理，更新 tasks / handover / 实现备注 |
+| P2 | 影响 requirement-contract、Decision、原型评审记录、proposal/design/tasks/specs 任一产物 | 回到受影响上游产物，更新并重新确认后再继续 |
+| P3 | 影响产品范围、架构方向、数据模型、权限、敏感数据、计费、多角色/多端协作、跨系统集成或发布策略 | 回到 route-decision-recorder / OpenSpec review，必要时拆新 change |
+
+判断原则：
+
+- 先看"哪个已确认产物会失效"，再看代码改动大小。
+- 只改实现但不改已确认契约，多数是 P1。
+- 需要改 brief/PRD、Decision 或 OpenSpec 三件套，就是 P2 起步。
+- 牵动路线、架构、数据、权限、跨系统或发布策略，升级为 P3。
+- 拿不准时按 P2 处理，先让受影响产物重新确认。
+
+### Step 5.6：纠偏 / rewind 识别
+
+需求变更里有一类特殊情况：用户不是在追加新需求，而是在**否定或回退当前的理解/产物**。这类"纠偏 / rewind"必须回到对应上游产物去改，绝不能当成新需求重新走一遍 requirement-contract / route-decision / OpenSpec。
+
+**触发信号**（用户在已有 contract / decision / OpenSpec / implementation 过程中说）：
+
+- "不是这个意思"、"你理解错了"、"这个理解不对"
+- "回到上一版"、"退回去"、"先撤回"、"revert 一下"
+- "改一下范围"、"范围不对"、"缩一下/扩一下"
+- "刚才那步走偏了"、"重来这一步"（针对某个已产出产物，而非整个需求）
+
+**判断逻辑**（先定位"回到哪一层"，再定位"改哪个产物"）：
+
+| 当前进行到 | 纠偏指向 | rewind 落点 |
+|-----------|---------|------------|
+| requirement-contract 起草/确认中 | 目标、范围、验收标准理解错 | 回到 `requirement-contract` 改本轮契约，不新建契约文件 |
+| route-decision 已确认 | 路线选错、first slice 划错、子项目拆分不对 | 回到 `route-decision-recorder` 改本轮 Decision，不新开需求 |
+| OpenSpec propose/design 后 | proposal/design/tasks 与真实意图不符 | 回到对应 OpenSpec change 修订三件套（改动大则按 P3 拆新 change） |
+| implementation 中 | 实现方向被推翻 | 回到最近一个失效的上游产物（多为 design 或 contract），修订后再继续 |
+
+**处理规则**：
+
+- 先复用 Step 5.5 的 P1/P2/P3 change impact 判断"哪个已确认产物失效"，rewind 只是明确"要往回退到那一层去改，而不是往前新开"。
+- rewind 复用已有的 change / contract / decision 文件与 `.zimaflow-state.yaml`，就地修订并把 `phase` 回退到对应阶段；不创建平行的新 change_id。
+- 如果用户其实是想在保留当前产物的基础上叠加新内容（而不是否定），那不是 rewind，按普通需求变更或新需求处理。
+- 纠偏产生的经验（AI 理解偏差、方向返工）按现有 `learn` 候选流程沉淀，不新建错题本。
+
+路由输出中追加：
+
+```markdown
+- 纠偏/rewind：无 / 检测到（回退落点：requirement-contract / route-decision / OpenSpec change / implementation 上游产物）
+```
+
 ### Step 6：建议工作模式与扩展开关
 
 根据风险与复杂度判断，向用户建议：
@@ -198,8 +295,18 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 >
 > 适合：低风险、低复杂度的单文件改动、bug 修复、样式调整、小功能补充。
 
+**问题排障**（根因未明的问题）：
+> 检测到排障/调试场景。先进入 `superpowers:systematic-debugging`：复现问题 → 采集证据 → 定位根因 → 形成最小验证。根因确认后，再回到 sdd-router 二次判断修复模式。
+>
+> 适合：报错、测试失败、线上异常、性能异常、集成失败、无法复现、用户只要求"看下为什么/定位原因"的场景。
+
 **紧急热修复**（线上问题）：
-> 检测到紧急修复场景。跳过任务拆解，直接进入 Superpowers 修复流程。修复后补 handover 文档。
+> 检测到紧急修复场景。先判断 hotfix 严重度：
+> - **P0（完全不可用）**：先止血（回滚/关开关/降级）再定位根因，不在止血前查代码细节。
+> - **P1（部分功能炸）**：快速修复，跳过完整需求/设计阶段，但补最小记录（改了什么/为什么/影响面）。
+> - **P2（边缘问题）**：不当热修复，退回正常路由（requirement-contract / 轻量模式）。
+>
+> P0/P1 止血/修复后补 handover 文档并触发 learn 候选扫描。（此 P0/P1/P2 是 hotfix 严重度，不是 Step 5.5 的需求变更影响级别 P1/P2/P3。）
 
 同时输出本轮启用的扩展开关。扩展开关只由项目协作模式和实际需求信号触发，不由工作模式单独触发。
 
@@ -218,16 +325,20 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 ## 路由结果
 
 - 项目协作模式：个人小项目 / 团队协作项目 / 团队多环境项目（如为推断需标注）
-- 需求形态：小修小补 / 老项目叠加功能 / 跨系统集成 / 架构或产品路线变化 / 紧急热修复
+- 需求形态：小修小补 / 老项目叠加功能 / 产品型界面流程 / 跨系统集成 / 架构或产品路线变化 / 问题排障 / 紧急热修复 / 需求变更
 - 复杂度：低 / 中 / 高
 - 风险：低 / 中 / 高
-- 建议工作模式：轻量模式 / 完整模式 / 紧急热修复
+- 建议工作模式：问题排障 / 轻量模式 / 完整模式 / 紧急热修复
 - 启用扩展：无 / 协作交接 / 多环境发布 / 联调验收记录 / 测试阻断记录 / 产品原型评审
 - 原型评审：不需要 / 建议启用（PRD-driven） / 建议启用（Idea-driven）
+- Context Index：已读取 / 缺失建议 onboarding / 无或不适用
 - 知识预加载：无 / 已加载 kf-...（触发锚点：...）
+- Change Impact：不适用 / P1 / P2 / P3（需求变更影响级别，判断哪个已确认产物失效）
+- 纠偏/rewind：无 / 检测到（回退落点：requirement-contract / route-decision / OpenSpec change / implementation 上游产物）
+- Hotfix 严重度：不适用 / P0 / P1 / P2（仅紧急热修复场景，衡量线上影响，与 Change Impact 是两套维度）
 - 需求契约：已有 / 需生成 brief / 需生成 PRD
 - 需求契约路径：（已确认后填入，未生成前留空）
-- 下一步：requirement-contract / task-planning / route-decision-recorder / 手动原型评审记录 / 热修复流程 / 手动初始化
+- 下一步：systematic-debugging / requirement-contract / task-planning / route-decision-recorder / 手动原型评审记录 / 热修复流程 / 手动初始化
 ```
 
 等待用户确认模式选择。
@@ -251,16 +362,17 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 | 涉及权限、计费、敏感信息 | PRD |
 | 团队协作项目 / 团队多环境项目 | PRD |
 | 用户明确要求"要 PRD"、"写详细点" | PRD |
+| 问题排障且根因未确认 | 跳过，先排障；根因确认后再判断是否需要 brief/PRD |
 | 紧急热修复 | 跳过，修复后按协作模式补记录 |
 | 拿不准 | 先建议 brief，需要时可从 brief 升级为 PRD，不强制一步到位 |
 
 触发 `requirement-contract` Skill，传递：项目名、代码路径、文档路径、需求描述、建议模式、Step 2.5 加载的知识、Step 3-5 的路由判断结果。
 
-**Gate**：`requirement-contract` 产出状态必须是"已确认"才能继续 Step 7。状态为"草稿"或"待确认"时，停在这一步，不移交下一阶段。紧急热修复场景不受此 Gate 约束，止血优先。
+**Gate**：`requirement-contract` 产出状态必须是"已确认"才能继续 Step 7。状态为"草稿"或"待确认"时，停在这一步，不移交下一阶段。问题排障场景在根因未确认前不受此 Gate 约束；紧急热修复场景不受此 Gate 约束，止血优先。
 
 ### Step 7：移交下一阶段
 
-**前置条件**：除紧急热修复外，本轮需求契约状态必须是"已确认"，否则停在 Step 6.5，不进入本步骤。
+**前置条件**：除问题排障和紧急热修复外，本轮需求契约状态必须是"已确认"，否则停在 Step 6.5，不进入本步骤。
 
 用户确认后：
 
@@ -268,6 +380,7 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 - **完整模式 + 不启用产品原型评审** → 先移交给 `route-decision-recorder` Skill，传递：项目名、代码路径、文档路径、需求描述、所选模式、已确认的需求契约路径
 - **轻量模式 + 用户明确要求原型** → 先记录探索原型范围和待确认问题；评审后再回到 `task-planning`
 - **轻量模式 + 不启用产品原型评审** → 移交给 `task-planning` Skill，传递：项目名、代码路径、文档路径、需求描述、所选模式、项目协作模式、需求形态、启用扩展、已确认的需求契约路径
+- **问题排障** → 直接触发 `superpowers:systematic-debugging`，传递：项目名、代码路径、文档路径、问题现象、已知错误信息、复现线索、项目协作模式、启用扩展；根因确认后回到 sdd-router 二次判断修复模式，并把根因摘要交给 `handover-manager` / `learn` 候选扫描
 - **紧急热修复** → 直接进入 Superpowers 修复流程，完成后触发 `handover-manager` 补记录
 
 如果完整模式对应的本轮 `Decisions/` 文档已经存在，且用户明确表示沿用当前路线，可跳过重写，直接把该文档路径一并传给 `task-planning`。
@@ -276,6 +389,10 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 
 - **宁可建议完整，不要漏掉设计**：如果拿不准，建议完整模式。用户可以随时降级为轻量。
 - **先看风险，再看复杂度**：复杂度决定流程要不要更完整，风险决定约束要不要更强。
+- **排障先于修复**：只要根因未明，就先进入 `superpowers:systematic-debugging`；不要把"看起来像 bug"直接路由成 task-planning 或 OpenSpec。
+- **变更先看影响产物**：需求变更不按行数分级；先判断哪个已确认产物会失效，再给 P1/P2/P3 change impact。
+- **纠偏是回退不是新开**：用户否定/回退当前理解（"不是这个意思/回到上一版/理解错了/先撤回/改范围"）时，回到失效的上游产物就地修订，复用已有 change/契约/state，不新开需求、不新建 change_id。
+- **两套 P 分级不混用**：Change Impact P1/P2/P3 衡量"哪个已确认产物失效"；Hotfix 严重度 P0/P1/P2 衡量"线上影响多严重"。前者管回退落点，后者管止血策略，输出时分别标注。
 - **先定项目语境，再套流程**：个人小项目不默认启用团队多环境、联调/验收、测试协作者、分支流扩展。
 - **需求形态不等于工作模式**：老项目叠加功能只是触发参考实现检查；是否完整模式仍由复杂度和风险决定。
 - **扩展开关独立输出**：轻量/完整决定主流程，扩展开关决定是否补协作、多环境、联调/验收、测试阻断记录。
@@ -283,6 +400,7 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 - **完整模式先落路线决策**：进入 OpenSpec 前，先把“这一轮怎么走”写进项目文档库 `Decisions/`，不要让 spec 兼任路线拍板文档。
 - **不替用户做决定**：规模判断和模式建议都只是建议，最终由用户确认。
 - **上下文恢复优先**：如果检测到未完成的 handover，优先提示继续，而不是默认开新需求。
+- **context index 是路标不是正文**：存在时先读 index，再按需读相关文档；缺失时建议老项目 onboarding，但不阻断普通需求。
 - **知识先于判断**：如果需求命中 knowledge-anchor-map，高风险路由判断前必须先读对应知识；没有知识时记录 learn 候选，不要现场编规则。
 - **契约先于规划**：不允许纯口头需求直接进入 `task-planning` / `route-decision-recorder` / 手动原型评审记录 / OpenSpec；必须先有已确认的需求契约（brief 或 PRD），但不强制人人都走完整 PRD。
 
@@ -291,5 +409,6 @@ cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
 - 不要在这个阶段开始写代码或生成 spec
 - 不要跳过项目识别直接开始工作
 - 不要在完整模式下直接把用户送进 `/opsx:propose`
-- 不要在需求契约仍是"草稿"或"待确认"状态时移交下一阶段（紧急热修复除外）
+- 不要在根因未明时承诺修复方案；排障场景必须先完成 `superpowers:systematic-debugging`
+- 不要在需求契约仍是"草稿"或"待确认"状态时移交下一阶段（问题排障和紧急热修复除外）
 - 如果用户直接说"继续上次的"但没有指定项目，读注册表中所有活跃项目的最新 handover，列出选项

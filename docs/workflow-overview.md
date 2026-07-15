@@ -38,11 +38,15 @@ flowchart TD
 - sdd-router
 - requirement-contract
 - task-planning
+- route-decision-recorder
 - openspec-superpowers-bridge
 - implementation
 - spec-compliance-check
+- legacy-project-onboarding
 - handover-manager
 - session-close-reconciler
 - learn
+
+主链路上还内置了几层工程护栏：需求契约的 Given/When/Then 验收标准与反问上限、合规检查的破坏性变更（B4）与沿用抽象（B5）门槛、收口的 hotfix/rewind/secrets Guardrail，以及给存量项目建立认知底座的 `legacy-project-onboarding`。
 
 实验性模块会等到有公开示例、稳定模板，并且不依赖任何未公开资源后再纳入，详见后续规划。

@@ -5,7 +5,8 @@
 | 需求契约已确认 | done | brief 已存在，并标记为已确认。 |
 | 任务计划边界清晰 | done | 共七个任务，低于 15 个任务限制。 |
 | OpenSpec change 已存在 | done | proposal/design/tasks 均已存在。 |
-| spec 合规检查 | pending | 实现后完成。 |
+| spec 合规检查 | pending | 实现后完成；含破坏性变更（B4）与沿用抽象（B5）审查。 |
+| Guardrail 收口 | done | 本轮无 hotfix / rewind / secrets 风险项。 |
 | handover 已写入 | done | 见 handover 文档。 |
 | 经验候选已审查 | pending | 候选见下方。 |
 

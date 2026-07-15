@@ -78,6 +78,9 @@ ls -lt <改动文件> 2>/dev/null
 | Skill / 工作流 / rule 改动 | `.claude/`、`.codex/`、`skills/`、`SKILL.md` 等文件变更 |
 | OpenSpec 路线/切片调整 | `openspec/changes/` 或 `Decisions/` 相关讨论 |
 | 踩坑/经验产生 | session 中有调试循环、方向返工、用户纠正 |
+| hotfix / incident 修复 | 本轮走了紧急热修复（hotfix 严重度 P0/P1），先止血或跳过完整流程修复线上问题 |
+| rewind / 需求纠偏 | 本轮回退了已确认的 contract / Decision / OpenSpec / tasks / implementation（用户说"理解错了/回到上一版/改范围/先撤回"等） |
+| secrets 敏感配置风险 | 本轮新增/改动 api_key/token/secret/password/private_key 等敏感配置，或疑似密钥进入版本库 |
 | learn 高置信信号 | 用户纠正关键判断、真源/runtime 路径误用、公开内容脱敏或状态修正、规则直接回写到 Skill、同类问题重复出现 |
 | knowledge usage | 本轮读取、引用、应用或质疑了带 `ID` 的 lesson/pattern |
 
@@ -105,6 +108,58 @@ cat "$ZIMAFLOW_DIR/references/doc-sync-matrix.md"
 | `knowledge-usage-ledger.jsonl` | 如果本轮按锚点加载、引用、应用或质疑知识，是否已追加 usage 事件 |
 | `openspec/specs/` | 如果有 archive 操作，specs 是否已更新 |
 | `config.yaml` | 如果改了约束类规则，是否同步 |
+| `.zimaflow-state.yaml` | 如果本轮推进了 OpenSpec change 阶段，phase、verify、archive、handover 是否与实际状态一致 |
+
+### Step 3.2：Guardrail 收口核对（hotfix / rewind / secrets）
+
+如果 Step 1 识别出 hotfix、rewind 或 secrets 命中，按 doc-sync-matrix 对应行逐项核对。这三类只检查、只提醒、只记入交接项，不自动写文档、不自动改密钥、不自动 revoke。
+
+**hotfix / incident 修复**：
+
+- 是否有事故记录：`INCIDENT/` 事故文档，或 handover"遗留与下一步" / `PROGRESS.md` 中记录了事故现象、根因、修复摘要、验证结果。
+- P0/P1 是否列出了 24h 内待补项：CHANGE / SUMMARY / tests / LESSONS 提名。
+- 缺记录 → ❌ 明确缺失（先止血后必须留痕）；有止血但待补项未列 → 📝 建议补充。
+
+**rewind / 需求纠偏**：
+
+- 是否记录了"被回退的产物、回退原因、当前有效版本"。
+- 被回退的 contract / Decision / OpenSpec / tasks 是否就地修订（而非新建平行产物导致新旧版本并存）。
+- 缺"当前有效版本"标注 → ❌ 明确缺失（下个 session 会分不清哪版有效）；仅缺回退原因 → 📝 建议补充。
+
+**secrets 敏感配置风险**：
+
+- 核对时**禁止把密钥值写入 checklist 或任何文档**，只引用 `path:line`。
+- 是否记录了：命中事实、处理动作、是否需要 revoke/rotate、是否已补 `.env.example` / `.gitignore`。
+- 若疑似真实密钥已进入 git 历史 → ❌ 明确缺失，并建议用户执行 revoke/rotate + 补 `.env.example` / `.gitignore`（reconciler 只提醒，不代为 revoke）。
+- 已确认是占位符 / env 间接引用（误报）→ 记为 ✅，说明已核实非真实密钥。
+
+输出模板：
+
+```markdown
+### 🛡️ Guardrail 收口
+- hotfix：INCIDENT/PROGRESS/handover 已记录 / ❌ 缺事故记录 / 📝 24h 待补项未列
+- rewind：当前有效产物已标注（{路径}）/ ❌ 未标注当前有效版本
+- secrets：{path:line} 已记录处理动作 + revoke/rotate 建议 / ✅ 核实为占位符 / ❌ 疑似真实密钥入库需 rotate（不写密钥值）
+```
+
+### Step 3.3：Zimaflow State Review
+
+如果本轮涉及 OpenSpec change，读取：
+
+```bash
+cat openspec/changes/<name>/.zimaflow-state.yaml
+```
+
+按 `references/Design-Zimaflow-State.md` 核对：
+
+- `phase` 是否与实际进度一致
+- 已确认需求契约、Decisions、原型评审记录、proposal/design/tasks 路径是否仍存在
+- `implementation` 是否记录 branch/worktree 隔离
+- `verification` 是否记录 `/opsx:verify` 和全量测试结果
+- archive 后是否写入 `archive.status` 和 `archive.docs_synced`
+- handover 生成后是否写入 `handover.latest_path`
+
+state 缺失或明显过期时，列为 📝 建议补充；如果缺失会导致无法判断 verify/archive 状态，列为 ❌ 明确缺失。
 
 ### Step 3.4：Knowledge Usage Review
 
@@ -180,6 +235,9 @@ cat "$ZIMAFLOW_DIR/references/doc-sync-matrix.md"
 ### 🧾 Knowledge Usage
 - （列出本轮知识 ID 的 loaded/cited/applied/challenged 状态；无则写"本轮未发现知识使用记录"）
 
+### 🛡️ Guardrail 收口
+- （本轮涉及 hotfix / rewind / secrets 时列出核对结果；密钥只写 path:line、不写值；均无则写"本轮无 hotfix / rewind / secrets 收口项"）
+
 ---
 **结论**：{本轮收口完整 / 有 N 项建议补充 / 有 N 项明确缺失}
 ```
@@ -230,4 +288,6 @@ cat "$ZIMAFLOW_DIR/references/doc-sync-matrix.md"
 - **usage review 不改正文**：reconciler 可以建议补记 ledger，但不能直接修改 lesson 内容或级别。
 - **矩阵驱动**：所有检查项来自 doc-sync-matrix.md，不凭 AI 自由发挥。如果矩阵没覆盖的改动类型，标注"矩阵未覆盖，建议人工判断"。
 - **不阻断流程**：即使有缺失项，用户说"不用管"就不管。reconciler 是提醒，不是 gate。
+- **Guardrail 只提醒不代办**：hotfix / rewind / secrets 三类收口项，reconciler 只检查、提醒、记入交接；不自动写 INCIDENT、不自动改密钥、不代为 revoke/rotate，是否处理由用户决定。
+- **密钥值绝不外泄**：secrets 命中只在 checklist 和 handover 中引用 `path:line`，任何情况下都不把密钥原文写入 checklist、handover 或 lessons。
 - **与 handover 串联不重叠**：reconciler 检查"文档同步了吗"，handover 检查"下一轮需要什么"。两者有交集（都看改动），但视角不同。

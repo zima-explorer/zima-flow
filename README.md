@@ -19,20 +19,28 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 6. 在 session 之间交接上下文
 7. 通过文档对账和经验沉淀完成收口
 
+它和一个通用的"spec-driven"封装不同的地方在于几层真实工程护栏：
+
+- **需求先立契约**：进入规划前强制一份已确认的 brief/PRD，验收标准优先写成 Given/When/Then，反问最多 2 轮后取默认值，不无限追问。
+- **实现有破坏性护栏**：合规检查内置破坏性变更门槛（删码/改公共接口/改 schema/改权限/改写库路径先排查引用面）和沿用现有抽象检查，只标记、交用户决策，不自动改。
+- **老项目能接管**：`legacy-project-onboarding` 给存量代码库快速建立架构、接口、数据模型和隐性知识的认知底座，配一份 thin context index 让后续 session 不必每次重扫全仓。
+- **收口有 Guardrail**：session 收尾对账覆盖 hotfix / rewind / secrets 三类风险，密钥只记 `path:line`、绝不外泄。
+
 这个仓库是公开发行版，只保留经过发行审查的主链路，比完整开发流程更精简。
 
 ## v0.1 纳入内容
 
 | 范围 | 文件 | 状态 |
 |------|------|------|
-| 需求路由 | `skills/sdd-router.md` | 纳入 |
-| 需求契约 | `skills/requirement-contract.md` | 纳入 |
+| 需求路由 | `skills/sdd-router.md` | 纳入（含排障路径、P1/P2/P3 变更分级、rewind、context index） |
+| 需求契约 | `skills/requirement-contract.md` | 纳入（含 Given/When/Then、反问上限） |
 | 任务拆解 | `skills/task-planning.md` | 纳入 |
 | 路线决策 | `skills/route-decision-recorder.md` | 纳入 |
 | OpenSpec 到执行衔接 | `skills/openspec-superpowers-bridge.md` | 纳入 |
-| 规范合规检查 | `skills/spec-compliance-check.md` | 纳入 |
-| handover | `skills/handover-manager.md` | 纳入 |
-| session 收口 | `skills/session-close-reconciler.md` | 纳入 |
+| 规范合规检查 | `skills/spec-compliance-check.md` | 纳入（含 B4 破坏性变更 / B5 沿用抽象护栏） |
+| 老项目认知底座 | `skills/legacy-project-onboarding.md` | 纳入 |
+| handover | `skills/handover-manager.md` | 纳入（含 Guardrail 承接、state/index） |
+| session 收口 | `skills/session-close-reconciler.md` | 纳入（含 hotfix/rewind/secrets Guardrail） |
 | 经验沉淀 | `skills/learn.md` | 纳入 |
 | 参考表 | `references/*.md` | 纳入，已脱敏 |
 | agent 规则 | `rules/` | 纳入 |
@@ -46,7 +54,6 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 | 方向 | 亮点 |
 |------|------|
 | 产品原型评审（`proto-review`） | 想法或 PRD 一键转成可评审原型，先看得见再写 spec。 |
-| 老项目认知底座（`legacy-project-onboarding`） | 接手存量项目快速建立认知：架构、接口、数据模型一览。 |
 | 一键初始化器 | 一条命令接入新项目，自动配好 OpenSpec、规则和 skills。 |
 | 完整 CLI | 在 `close` 之外补上状态跟踪、知识淘汰复查和交接漂移检查。 |
 | 知识使用闭环 | 经验从"靠记忆"变成可追踪、可淘汰的账本。 |

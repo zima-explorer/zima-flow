@@ -103,4 +103,4 @@ export ZIMAFLOW_PROJECTS_DIR="$HOME/projects-docs"
 
 - v0.1 只提供基础安装脚本；完整项目初始化器后续提供。
 - v0.1 不会自动链接 skills 到特定 agent 的 skill 目录。
-- `proto-review` 和 legacy onboarding 暂不属于首发边界。
+- `proto-review`、完整初始化器和完整 CLI 暂不属于首发边界（`legacy-project-onboarding` 已纳入 v0.1）。

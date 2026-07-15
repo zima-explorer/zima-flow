@@ -20,8 +20,8 @@
 | OpenSpec change 完成并 archive | `openspec/specs/`（自动） | 自动 | archive 命令自动合并，无需手动 |
 | Skill / 工作流文件改动 | 所属套件的 `README.md` | 必须 | 更新 Skill 列表、版本记录 |
 | Skill 新增 | 所属套件的 `README.md` | 必须 | 加入 Skill 表格、配套文件表格 |
-| 存量项目梳理产物新增/变更（后续提供模块） | 项目 `Designs/Architecture-Overview.md` / `Interface-Inventory.md` / `Data-Model-ER.md` / `Implicit-Knowledge-QA.md` | 建议 | 老项目 onboarding 不在 v0.1 主链路内；如手动执行，建议落文档 |
-| 存量项目梳理发现隐性坑或规则（后续提供模块） | Learn 候选扫描结果；确认后写入项目 `lessons.md` 或 `lessons-common.md` | 建议 | 人类补充的隐藏约束可能需要进入经验库 |
+| 存量项目梳理产物新增/变更（legacy-project-onboarding） | 项目 `Designs/Architecture-Overview.md` / `Interface-Inventory.md` / `Data-Model-ER.md` / `Implicit-Knowledge-QA.md` + `.zimaflow/context-index.yaml` | 建议 | 执行 `legacy-project-onboarding` 后落 baseline 文档并更新 context index |
+| 存量项目梳理发现隐性坑或规则（legacy-project-onboarding） | Learn 候选扫描结果；确认后写入项目 `lessons.md` 或 `lessons-common.md` | 建议 | 人类补充的隐藏约束可能需要进入经验库 |
 | Rule 文件改动 | 关联 Skill 的说明（如有） | 建议 | 确保 Skill 文档描述与 rule 行为一致 |
 | config.yaml 规则变更 | Bridge Rule 引用是否仍正确 | 建议 | Bridge Rule 只指路，但要确认指的路没断 |
 | 踩坑 / 调试循环 / 方向返工 | Learn 候选扫描结果；确认后写入项目 `lessons.md` 或 `lessons-common.md` | 建议 | reconciler 必须输出候选或明确"未发现高置信候选"，写入由 learn 在用户确认后执行 |

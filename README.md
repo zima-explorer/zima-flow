@@ -1,7 +1,11 @@
 # zimaflow
 
-[![CI](https://github.com/zima-explorer/zima-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/zima-explorer/zima-flow/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/zima-explorer/zima-flow/actions/workflows/ci.yml"><img src="https://github.com/zima-explorer/zima-flow/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/zima-explorer/zima-flow/stargazers"><img src="https://img.shields.io/github/stars/zima-explorer/zima-flow?style=flat-square&logo=github" alt="stars"></a>
+  <a href="https://github.com/zima-explorer/zima-flow/network/members"><img src="https://img.shields.io/github/forks/zima-explorer/zima-flow?style=flat-square" alt="forks"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/zima-explorer/zima-flow?style=flat-square" alt="license"></a>
+</p>
 
 zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理成可追踪的实现闭环。
 
@@ -113,24 +117,43 @@ zimaflow/
 
 ## 快速开始
 
-先读 [docs/getting-started.md](docs/getting-started.md)。
+### 1. 30 秒确认它能跑
 
-最短路径：
+clone 下来直接运行收口检查，无需安装或配置：
 
 ```bash
-export ZIMAFLOW_HOME="$PWD"
-export ZIMAFLOW_PROJECTS_DIR="$PWD/examples/demo/project-docs"
+git clone https://github.com/zima-explorer/zima-flow.git
+cd zima-flow
+bin/zimaflow close
 ```
 
-然后打开 [examples/demo/README.md](examples/demo/README.md)，按示例需求走一遍。
+会立即输出当前仓库的 git 状态和下一步建议——这是最小的可运行证明。
 
-v0.1 提供基础安装脚本：
+### 2. 3 分钟看一条真实需求走完主链路
+
+demo 用一句需求 `Add a tiny todo list CLI ...` 演练了整条链路，产物直接看这几个文件：
+
+- 需求 brief（含 Given/When/Then 验收标准）：[todo-cli-brief.md](examples/demo/project-docs/demo-cli/docs/Requirements/2026-07-11-todo-cli-brief.md)
+- 任务拆解（first slice）：[todo-cli-tasks.md](examples/demo/project-docs/demo-cli/docs/Tasks/2026-07-11-todo-cli-tasks.md)
+- OpenSpec change 骨架：[add-todo-cli/](examples/demo/project-docs/demo-cli/openspec/changes/add-todo-cli/)
+- 收口对账：[todo-cli-closing.md](examples/demo/project-docs/demo-cli/docs/Closing/2026-07-11-todo-cli-closing.md)
+- session handover：[handover-todo-cli.md](examples/demo/project-docs/demo-cli/docs/Handover/2026-07-11-handover-todo-cli.md)
+
+走查引导见 [examples/demo/README.md](examples/demo/README.md)。想深入每个 skill，从入口 [`skills/sdd-router.md`](skills/sdd-router.md) 开始，完整清单见 [docs/getting-started.md](docs/getting-started.md)。
+
+### 3. 安装到本地使用
 
 ```bash
 scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"
 ```
 
-安装脚本只复制公开仓内容，不初始化 OpenSpec、不创建项目注册表、不修改 shell profile 或 agent 配置。
+安装脚本只复制公开仓内容，不初始化 OpenSpec、不创建项目注册表、不修改 shell profile 或 agent 配置。demo 运行所需的环境变量在 [examples/demo/README.md](examples/demo/README.md) 中说明。
+
+可选：在 git 仓库里装一个非阻断提醒 hook，提交或推送前提示你跑一次收口检查（不拦截提交，已有 hook 会跳过）：
+
+```bash
+bin/zimaflow install-hooks
+```
 
 ## 设计原则
 

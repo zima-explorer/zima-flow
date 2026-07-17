@@ -149,6 +149,26 @@ scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"
 
 安装脚本只复制公开仓内容，不初始化 OpenSpec、不创建项目注册表、不修改 shell profile 或 agent 配置。demo 运行所需的环境变量在 [examples/demo/README.md](examples/demo/README.md) 中说明。
 
+`skills/` 是 zimaflow 的中立源文件。若要所有项目都能自动发现，把 skill 安装到 agent 实际扫描的全局 skill root：
+
+```bash
+scripts/install.sh --target "$HOME/.zimaflow" \
+  --agent-skill-root "$HOME/agent_skills"
+```
+
+如果不同 agent 各自维护全局目录，就分别指定：
+
+```bash
+scripts/install.sh --target "$HOME/.zimaflow" \
+  --claude-skill-root "$HOME/.claude/skills" \
+  --codex-skill-root "$HOME/.agents/skills" \
+  --workbuddy-skill-root "$HOME/.workbuddy/skills"
+```
+
+自动发现结构统一使用扁平的 `zimaflow-<name>/SKILL.md` 命名，而不是 `zimaflow/<name>/SKILL.md` 子目录。这样可以兼容只扫描 `<root>/<skill>/SKILL.md` 一层的 agent，同时避免和用户已有 skill 重名。
+
+若只想让某个项目自动发现，可在项目根目录使用 `--claude-code` 或 `--codex` 生成项目级 adapter。安装后把 `ZIMAFLOW_HOME` 指向目标目录，skill 内对 `references/` 的引用统一走 `$ZIMAFLOW_HOME/references/`。详见 [docs/getting-started.md](docs/getting-started.md)。
+
 可选：在 git 仓库里装一个非阻断提醒 hook，提交或推送前提示你跑一次收口检查（不拦截提交，已有 hook 会跳过）：
 
 ```bash

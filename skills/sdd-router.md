@@ -129,16 +129,16 @@ find <code_repo>/openspec/changes -maxdepth 3 -name .zimaflow-state.yaml 2>/dev/
 读取 zimaflow 的知识锚点表：
 
 ```bash
-cat "$ZIMAFLOW_DIR/references/knowledge-anchor-map.md"
+cat "$ZIMAFLOW_HOME/references/knowledge-anchor-map.md"
 ```
 
 将用户需求、项目文档摘要、最近 handover 摘要与锚点表做语义匹配。
 
 匹配规则：
 
-- 命中高信号锚点时，读取对应 `references/lessons-common.md` 或项目 `lessons.md` 中的 knowledge ID 条目。
+- 命中高信号锚点时，读取对应 `$ZIMAFLOW_HOME/references/lessons-common.md` 或项目 `lessons.md` 中的 knowledge ID 条目。
 - 最多加载 3 条；如果超过 3 条，优先加载与风险最高维度相关的条目。
-- 加载后追加 `loaded` 事件到 `references/knowledge-usage-ledger.jsonl`，字段遵循 `references/knowledge-usage-guide.md`。
+- 加载后追加 `loaded` 事件到 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`，字段遵循 `$ZIMAFLOW_HOME/references/knowledge-usage-guide.md`。
 - 如果触碰高风险主题但没有对应锚点，输出 Learn 候选："缺少 {主题} 的锚点/知识条目"。
 
 路由输出中追加：

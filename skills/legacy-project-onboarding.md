@@ -226,7 +226,7 @@ updated_by: legacy-project-onboarding
 
 ### Step 8：知识账本
 
-如果本次 onboarding 读取或应用了 `references/knowledge-anchor-map.md` 中的知识，按 `references/knowledge-usage-guide.md` 追加 ledger 事件。
+如果本次 onboarding 读取或应用了 `$ZIMAFLOW_HOME/references/knowledge-anchor-map.md` 中的知识，按 `$ZIMAFLOW_HOME/references/knowledge-usage-guide.md` 追加 ledger 事件。
 
 如果本次产出了可复用经验，不直接写入 lessons；交给 `learn` 做用户确认。
 

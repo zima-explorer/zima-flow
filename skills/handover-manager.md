@@ -98,7 +98,7 @@ description: >
 1. **先触发 session-close-reconciler**：检查本轮改动的文档同步完整性。如有明确缺失项，建议用户先补再生成 handover；如用户选择"记入遗留"，将缺失项纳入 handover 的"遗留与下一步"。如果 reconciler 输出了 🛡️ Guardrail 收口项（hotfix / rewind / secrets），把它们承接进 handover 的"Guardrail 承接"小节
 2. 回顾本次 session 的所有改动
 3. 按模板生成完整 handover
-4. **读取 Zimaflow State**：如果存在 `openspec/changes/<change>/.zimaflow-state.yaml`，在 handover frontmatter 和"启动指引"中记录 state 路径和当前 phase；生成 handover 后，按 `references/Design-Zimaflow-State.md` 回写 `handover.latest_path`
+4. **读取 Zimaflow State**：如果存在 `openspec/changes/<change>/.zimaflow-state.yaml`，在 handover frontmatter 和"启动指引"中记录 state 路径和当前 phase；生成 handover 后，按 `$ZIMAFLOW_HOME/references/Design-Zimaflow-State.md` 回写 `handover.latest_path`
 5. **更新 Context Index**：如果存在 `<docs_dir>/.zimaflow/context-index.yaml`，生成 handover 后只更新 `workflow.latest_handover`、必要时更新 `workflow.latest_state` 和 `updated_at`；不要把 handover 正文、文件清单或验证日志复制到 index。如果 index 不存在，不为普通收尾强制创建，可在遗留中建议老项目补 `legacy-project-onboarding`
 6. **汇总 Knowledge Usage**：读取 reconciler 输出和本轮对 `knowledge-anchor-map.md` / `lessons-common.md` / 项目 `lessons.md` 的使用记录，把 loaded/cited/applied/challenged 的 knowledge ID 写入 handover 的 `## Knowledge Usage`
 7. **触发 learn Skill 扫描**：回顾本次 session，识别是否有值得沉淀的经验（用户纠正、排错过程、技术决策、重复踩坑等）。如有候选 lessons，在 handover 文档末尾追加 `## 待沉淀经验` 小节，列出候选条目等用户确认

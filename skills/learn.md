@@ -15,9 +15,9 @@ description: >
 
 同时维护知识使用证据：
 - 新 lesson/pattern 必须带稳定 `ID`（格式：`kf-YYYYMMDD-short-slug`）
-- 使用记录写入 `zimaflow/references/knowledge-usage-ledger.jsonl`
-- 锚点触发规则见 `zimaflow/references/knowledge-anchor-map.md`
-- 账本字段和淘汰规则见 `zimaflow/references/knowledge-usage-guide.md`
+- 使用记录写入 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`
+- 锚点触发规则见 `$ZIMAFLOW_HOME/references/knowledge-anchor-map.md`
+- 账本字段和淘汰规则见 `$ZIMAFLOW_HOME/references/knowledge-usage-guide.md`
 
 账本只能作为证据，不能替代用户确认。`learn` 可以根据 ledger 建议更新"出现次数"、升级、降级或淘汰，但写入 lesson 正文、修改级别、回写 Skill 前必须问用户。
 
@@ -94,7 +94,7 @@ handover-manager 生成交接文档时，自动扫描本次 session 是否有待
 | 级别 | 写入位置 | 条件 |
 |------|---------|------|
 | lesson（项目级） | `<docs_dir>/lessons.md` | 默认，用户确认即写入 |
-| pattern（通用级） | `zimaflow/references/lessons-common.md` | 用户确认"这个跨项目通用"后写入 |
+| pattern（通用级） | `$ZIMAFLOW_HOME/references/lessons-common.md` | 用户确认"这个跨项目通用"后写入 |
 | rule/skill | 项目 `CLAUDE.md` 或新建 Skill | 用户确认"封装成规则"后执行 |
 
 > **脱敏要求**：项目级 `lessons.md` 可以保留真实项目名等本地信息；但写入通用级 `lessons-common.md` 时，必须省略或泛化"来源 / 出现项目"等字段，只保留可复用的技术结论，不带入任何具体项目名、第三方名或内部路径。
@@ -147,8 +147,8 @@ handover-manager 生成交接文档时，自动扫描本次 session 是否有待
 每次触发时，先扫描已有经验库做去重和计数更新：
 
 1. 读取当前项目的 `<docs_dir>/lessons.md`（如果存在）
-2. 读取 `zimaflow/references/lessons-common.md`
-3. 读取 `zimaflow/references/knowledge-usage-ledger.jsonl`（如果存在）
+2. 读取 `$ZIMAFLOW_HOME/references/lessons-common.md`
+3. 读取 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`（如果存在）
 4. 对候选 lesson 的主题、关键词、稳定 ID，与已有条目做相似度匹配：
    - 完全匹配（相同的错误信息、相同的 API/工具名）→ 更新出现次数
    - 相似主题（同一技术领域的类似问题）→ 提示用户确认是否为同一类
@@ -157,7 +157,7 @@ handover-manager 生成交接文档时，自动扫描本次 session 是否有待
 
 ## 知识使用账本
 
-当 learn 确认某条知识被复用、引用、应用或质疑时，追加 JSONL 事件到 `references/knowledge-usage-ledger.jsonl`。
+当 learn 确认某条知识被复用、引用、应用或质疑时，追加 JSONL 事件到 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`。
 
 最低字段：
 

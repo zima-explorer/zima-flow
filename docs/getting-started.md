@@ -43,13 +43,13 @@ skills/learn.md
 scripts/install.sh --target "$HOME/.zimaflow"
 ```
 
-同时安装最小 CLI：
+可选：安装最小 CLI。它只提供 `zimaflow close`、`zimaflow close --json` 和非阻断 hook 提醒，方便在任意项目目录快速检查收口状态；完整工作流仍由 skills 执行。
 
 ```bash
 scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"
 ```
 
-安装脚本只复制 `skills/`、`rules/`、`references/`，并可选安装 `bin/zimaflow` 或显式指定的 agent skill root。它不使用网络、不写入 shell profile、不修改任何 agent 配置、不初始化 OpenSpec、不创建项目注册表或项目文档目录。
+安装脚本只复制 `skills/`、`rules/`、`references/`，并可选安装最小 CLI 或向显式指定的 `--adapter-dir` 生成自动发现 adapter。它不使用网络、不写入 shell profile、不修改任何 agent 配置、不初始化 OpenSpec、不创建项目注册表或项目文档目录。
 
 安装后请把 `ZIMAFLOW_HOME` 指向目标目录，skill 内部对 `references/` 的引用统一使用 `$ZIMAFLOW_HOME/references/`：
 
@@ -65,48 +65,45 @@ scripts/install.sh --target "$HOME/.zimaflow" --force
 
 ### 让 agent 自动发现 skills
 
-`skills/` 下是扁平的 `*.md` 文件。部分 agent 只发现“每个 skill 一个独立文件夹，文件名必须是 `SKILL.md`”的结构，因此直接把扁平文件复制到项目里，可能不会被自动扫描。
+`skills/` 下是 zimaflow 的中立源文件。Codex、WorkBuddy 等在你显式指定源目录或运行环境支持递归读取时，优先直接使用仓库里的源文件，不需要为它们生成特殊命名；如果你希望某个 agent 走自动发现，仍要按该 agent 实际扫描的结构生成 adapter。
 
-如果你已经让多个 agent 扫描同一个全局 skill root，把 zimaflow 安装到这个 root：
+Claude Code 的全局 skill 发现机制比较特殊：它只扫描 `<skill-root>/<skill>/SKILL.md` 这一层，不会递归理解 `skills/*.md` 这样的源结构。因此，只有在你希望 Claude Code 自动发现 zimaflow skills 时，才需要生成扁平 adapter。
 
-```bash
-scripts/install.sh --target "$HOME/.zimaflow" \
-  --agent-skill-root "$HOME/agent_skills"
-# 生成 $HOME/agent_skills/zimaflow-<name>/SKILL.md
-```
-
-如果各 agent 各自维护全局 skill root，分别指定：
+如果你已经让多个 agent 扫描同一个全局 skill root，也可以把 adapter 安装到这个 root：
 
 ```bash
 scripts/install.sh --target "$HOME/.zimaflow" \
-  --claude-skill-root "$HOME/.claude/skills" \
-  --codex-skill-root "$HOME/.agents/skills" \
-  --workbuddy-skill-root "$HOME/.workbuddy/skills"
-# 分别生成 <root>/zimaflow-<name>/SKILL.md
+  --adapter-dir "/path/to/global-skill-root"
+# 生成 /path/to/global-skill-root/zimaflow-<name>/SKILL.md
 ```
 
-全局 skill root 采用扁平一层的 `zimaflow-<name>/SKILL.md`，不生成 `zimaflow/<name>/SKILL.md`。原因是不同 agent 对 skill root 的递归扫描能力不一致；例如 Claude Code 的 nested discovery 是在工作树不同层级发现各自的 `.claude/skills/`，不能等同于在一个全局 `skills/` 目录内递归发现分组子目录。扁平前缀同时避免文件路径冲突和 frontmatter `name` 冲突。
+如果各 agent 各自维护全局 skill root，只给确实需要 adapter 的 agent 指定对应 root。最常见的是 Claude Code：
 
-如果只想让某个项目自动发现，把 `--target` 指向项目根目录并生成项目级 adapter：
+```bash
+scripts/install.sh --target "$HOME/.zimaflow" \
+  --adapter-dir "$HOME/.claude/skills"
+# 生成 $HOME/.claude/skills/zimaflow-<name>/SKILL.md
+```
+
+adapter 采用扁平一层的 `zimaflow-<name>/SKILL.md`，不生成 `zimaflow/<name>/SKILL.md`。这个命名是 runtime 兼容层，不是源码组织方式；它主要服务 Claude Code 自动发现，同时避免文件路径冲突和 frontmatter `name` 冲突。
+
+如果只想让某个项目里的 Claude Code 自动发现，把 `--target` 指向项目根目录并使用 `--claude-code`：
 
 ```bash
 scripts/install.sh --target /path/to/project --claude-code
 # 生成 /path/to/project/.claude/skills/zimaflow-<name>/SKILL.md
-
-scripts/install.sh --target /path/to/project --codex
-# 生成 /path/to/project/.agents/skills/zimaflow-<name>/SKILL.md
 ```
 
-`--agent-skill-root` 和 `--*-skill-root` 只写入用户显式传入的目录；脚本不会替你配置 agent 去扫描该目录。WorkBuddy 等未在 v0.1 中声明默认目录的 agent，应使用它实际配置的 skill root。
+`--adapter-dir` 只写入用户显式传入的目录；脚本不会替你配置 agent 去扫描该目录。WorkBuddy 等未在 v0.1 中声明默认目录的 agent，应使用它实际配置的 skill root。
 
 ## 4. 手动使用
 
 如果不运行安装脚本，也可以采用以下方式：
 
-- 让 agent 读取 `skills/` 中的文件，并按主链路执行。
+- 让 agent 直接读取仓库中的 `skills/` 源文件，并按主链路执行；能递归读取或支持显式路径的 agent 推荐这样做。
 - 若目标是 **Claude Code**：把每个 `skills/<name>.md` 放成 `.claude/skills/zimaflow-<name>/SKILL.md`，并将 frontmatter `name` 同步设为 `zimaflow-<name>`，否则不会被自动发现或会因校验不一致失败。
-- 若目标是 **Codex**：把每个 `skills/<name>.md` 放成 `.agents/skills/zimaflow-<name>/SKILL.md`，并将 frontmatter `name` 同步设为 `zimaflow-<name>`。
-- 若目标是某个全局 skill root：把每个 `skills/<name>.md` 放成 `<root>/zimaflow-<name>/SKILL.md`，将 frontmatter `name` 同步设为 `zimaflow-<name>`，并确认 agent 已配置扫描 `<root>`。
+- 若目标是 **Codex / WorkBuddy**：优先配置或指向 zimaflow 源目录；仅当你的具体运行环境也要求 `<skill>/SKILL.md` 一层结构时，才生成 `zimaflow-<name>` adapter。
+- 若目标是某个全局 skill root：只有确认该 agent 需要一层 `SKILL.md` adapter 时，才把每个 `skills/<name>.md` 放成 `<root>/zimaflow-<name>/SKILL.md`，并将 frontmatter `name` 同步设为 `zimaflow-<name>`。
 - 若目标 agent 没有公开或已验证的自动发现目录：保持使用 `skills/` 扁平源文件，并在 agent 指令中显式要求读取入口 skill。
 - 将 `rules/` 和 `references/` 与 skills 放在一起，并把 `ZIMAFLOW_HOME` 指向其所在目录，确保 `$ZIMAFLOW_HOME/references/` 引用可解析。
 

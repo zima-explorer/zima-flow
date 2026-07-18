@@ -9,7 +9,7 @@
 
 ### 新增
 
-- `scripts/install.sh` 增加 agent 自动发现适配参数：`--claude-code` 生成 `.claude/skills/zimaflow-<name>/SKILL.md`，`--codex` 生成 `.agents/skills/zimaflow-<name>/SKILL.md`；新增 `--agent-skill-root`、`--claude-skill-root`、`--codex-skill-root`、`--workbuddy-skill-root`，支持统一或按 agent 分开的全局 skill root（默认不改动任何 agent 配置）。
+- `scripts/install.sh` 增加 `--adapter-dir <dir>`，可重复生成 `zimaflow-<name>/SKILL.md` 扁平 adapter；保留 `--claude-code` 作为项目级 Claude Code adapter 快捷方式（默认不改动任何 agent 配置）。
 
 ### 修复
 
@@ -20,7 +20,7 @@
 ### 文档
 
 - 强化首页 README 的低记忆入口、工作流概览图、可靠性机制和学习要点说明，让 v0.1 主链路更容易快速理解。
-- README 与 `docs/getting-started.md` 补充全局 skill root、按 agent 分开的全局 root、项目级 Claude Code / Codex adapter 的目录结构要求，以及 `ZIMAFLOW_HOME` 与 `$ZIMAFLOW_HOME/references/` 的对应关系。
+- README 与 `docs/getting-started.md` 补充通用源文件优先、Claude Code 自动发现 adapter、`--adapter-dir` 目录结构要求，以及 `ZIMAFLOW_HOME` 与 `$ZIMAFLOW_HOME/references/` 的对应关系。
 
 ## [0.1.0] — 2026-07-15
 

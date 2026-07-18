@@ -33,7 +33,7 @@ skills/handover-manager.md
 skills/learn.md
 ```
 
-你可以把这些文件作为 agent skills 使用，也可以把它们当作人工评估工作流的检查清单。
+你可以把这些文件作为 agent skills 使用，也可以把它们当作人工评估工作流的检查清单。显式使用 zimaflow 时，优先让 agent 读取仓库根目录的 `SKILL.md`，它会路由到 `skills/` 下的具体流程文件。
 
 ## 3. 基础安装
 
@@ -49,7 +49,7 @@ scripts/install.sh --target "$HOME/.zimaflow"
 scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"
 ```
 
-安装脚本只复制 `skills/`、`rules/`、`references/`，并可选安装最小 CLI 或向显式指定的 `--adapter-dir` 生成自动发现 adapter。它不使用网络、不写入 shell profile、不修改任何 agent 配置、不初始化 OpenSpec、不创建项目注册表或项目文档目录。
+安装脚本复制根 `SKILL.md`、`skills/`、`rules/`、`references/`，并可选安装最小 CLI 或向显式指定的 `--adapter-dir` 生成自动发现 adapter。它不使用网络、不写入 shell profile、不修改任何 agent 配置、不初始化 OpenSpec、不创建项目注册表或项目文档目录。
 
 安装后请把 `ZIMAFLOW_HOME` 指向目标目录，skill 内部对 `references/` 的引用统一使用 `$ZIMAFLOW_HOME/references/`：
 
@@ -100,7 +100,7 @@ scripts/install.sh --target /path/to/project --claude-code
 
 如果不运行安装脚本，也可以采用以下方式：
 
-- 让 agent 直接读取仓库中的 `skills/` 源文件，并按主链路执行；能递归读取或支持显式路径的 agent 推荐这样做。
+- 让 agent 直接读取仓库根目录的 `SKILL.md`，再按它的路由进入 `skills/` 源文件；能递归读取或支持显式路径的 agent 推荐这样做。
 - 若目标是 **Claude Code**：把每个 `skills/<name>.md` 放成 `.claude/skills/zimaflow-<name>/SKILL.md`，并将 frontmatter `name` 同步设为 `zimaflow-<name>`，否则不会被自动发现或会因校验不一致失败。
 - 若目标是 **Codex / WorkBuddy**：优先配置或指向 zimaflow 源目录；仅当你的具体运行环境也要求 `<skill>/SKILL.md` 一层结构时，才生成 `zimaflow-<name>` adapter。
 - 若目标是某个全局 skill root：只有确认该 agent 需要一层 `SKILL.md` adapter 时，才把每个 `skills/<name>.md` 放成 `<root>/zimaflow-<name>/SKILL.md`，并将 frontmatter `name` 同步设为 `zimaflow-<name>`。

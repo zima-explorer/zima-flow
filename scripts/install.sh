@@ -169,6 +169,13 @@ copy_tree "skills"
 copy_tree "rules"
 copy_tree "references"
 
+if [ -f "$repo_root/SKILL.md" ]; then
+  if [ -e "$target_dir/SKILL.md" ] && [ "$force" != "yes" ]; then
+    die "目标文件已存在：$target_dir/SKILL.md（使用 --force 覆盖）"
+  fi
+  cp "$repo_root/SKILL.md" "$target_dir/SKILL.md"
+fi
+
 if [ "$claude_code" = "yes" ]; then
   install_adapter_dir_once "$target_dir/.claude/skills"
 fi

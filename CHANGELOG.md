@@ -9,6 +9,7 @@
 
 ### 新增
 
+- 根目录新增 `SKILL.md`，作为开源用户显式指定给 agent 的 zimaflow 入口 router。
 - `scripts/install.sh` 增加 `--adapter-dir <dir>`，可重复生成 `zimaflow-<name>/SKILL.md` 扁平 adapter；保留 `--claude-code` 作为项目级 Claude Code adapter 快捷方式（默认不改动任何 agent 配置）。
 
 ### 修复

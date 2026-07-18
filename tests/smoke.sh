@@ -21,6 +21,11 @@ if printf '%s\n' "$help_output" | grep -q -- '--codex'; then
 fi
 "$repo_root/scripts/install.sh" --target "$target_dir" --bin-dir "$bin_dir" --force
 
+test -f "$repo_root/SKILL.md"
+grep -q '^name: zimaflow$' "$repo_root/SKILL.md"
+grep -q './skills/sdd-router.md' "$repo_root/SKILL.md"
+test -f "$target_dir/SKILL.md"
+grep -q '^name: zimaflow$' "$target_dir/SKILL.md"
 test -f "$target_dir/skills/sdd-router.md"
 test -f "$target_dir/rules/codex/zimaflow-session-close-gate.md"
 test -f "$target_dir/references/workload-dict.md"

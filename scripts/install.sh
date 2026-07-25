@@ -100,7 +100,7 @@ copy_tree() {
   mkdir -p "$dst"
 
   while IFS= read -r file; do
-    local rel="${file#$src/}"
+    local rel="${file#"$src"/}"
     local out="$dst/$rel"
     if [ -e "$out" ] && [ "$force" != "yes" ]; then
       die "目标文件已存在：$out（使用 --force 覆盖）"
@@ -108,7 +108,7 @@ copy_tree() {
   done < <(find "$src" -type f | sort)
 
   while IFS= read -r file; do
-    local rel="${file#$src/}"
+    local rel="${file#"$src"/}"
     local out="$dst/$rel"
     mkdir -p "$(dirname "$out")"
     cp "$file" "$out"

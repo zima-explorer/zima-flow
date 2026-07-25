@@ -171,7 +171,8 @@ printf '%s' "$jsonE_14" | grep -q '"threshold_days":14'
 printf '%s' "$jsonE_14" | grep -q '"status":"stale"'
 
 for bad in "--days 0" "--summary-lines 0" "--days abc" "--days" "--summary-lines" "--bogus" "--all" "--project demo"; do
-  if "$zimaflow" recall $bad >/dev/null 2>&1; then
+  read -r -a bad_args <<< "$bad"
+  if "$zimaflow" recall "${bad_args[@]}" >/dev/null 2>&1; then
     echo "FAIL: 'recall $bad' should have failed" >&2
     exit 1
   fi

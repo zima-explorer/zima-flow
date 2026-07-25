@@ -1,21 +1,21 @@
 # 发版检查清单（RELEASING）
 
-> 本文面向维护者和参与发版的贡献者，不是普通使用文档。发布任何 v0.1 候选版本前，按此清单检查。
+> 本文面向维护者和参与发版的贡献者，不是普通使用文档。发布任何公开候选版本前，按此清单检查。
 
 ## 范围
 
-- [ ] 确认 release 目标是 `v0.1`。
+- [ ] 确认 release 目标版本，并核对 `bin/zimaflow --version` 输出一致。
 - [ ] 确认 release 包含一条完整主链路：需求进入、需求契约、任务拆解、OpenSpec/Superpowers bridge、合规检查、handover、session 收口和经验沉淀。
-- [ ] 确认后续规划模块仍标记为后续规划或后续提供，尤其是完整项目初始化器、`proto-review` 和完整 CLI 打包（`legacy-project-onboarding` 已纳入 v0.1）。
+- [ ] 确认后续规划模块仍标记为后续规划或后续提供，尤其是完整项目初始化器、`proto-review`、跨项目 recall、release/context/drift 检查和 hard hooks。
 
 ## 公开内容审查
 
 - [ ] README.md 第一屏解释 zimaflow 是什么。
 - [ ] README.md 第一屏解释 zimaflow 不是什么。
-- [ ] README.md 说明 v0.1 能让读者完整体验什么。
+- [ ] README.md 说明当前公开版能让读者完整体验什么，以及本版本新增了哪些公开能力。
 - [ ] README.md 链接到 demo 入口。
 - [ ] 目录分工清楚：`skills/`、`rules/`、`references/`、`docs/`、`examples/demo/`。
-- [ ] `docs/getting-started.md` 说明 v0.1 只有基础安装脚本，完整项目初始化器后续提供。
+- [ ] `docs/getting-started.md` 说明公开版只有基础安装脚本，完整项目初始化器后续提供。
 - [ ] `docs/open-source-boundary.md` 与仓库中实际存在的文件一致。
 - [ ] 仓库中不包含迁移过程、筛选依据或只服务维护者的临时记录。
 

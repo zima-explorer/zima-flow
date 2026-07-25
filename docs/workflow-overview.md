@@ -31,6 +31,22 @@ flowchart TD
 
 `完整模式` 适合需要路线决策、OpenSpec change 和更强审查记录的改动。
 
+## 续接视角
+
+一次需求不一定在一个 session 里完成。zimaflow 把续接拆成几种产物，各自保持轻量：
+
+```mermaid
+flowchart LR
+  A["开始"] --> B["读取上次 handover"]
+  B --> C["查看当前 change 状态"]
+  C --> D["继续实现或验证"]
+  D --> E["session-close-reconciler"]
+  E --> F["handover-manager"]
+  F --> G["下次恢复"]
+```
+
+当前公开版已经纳入 handover、state/index 约定、session 收口，以及单仓 `state` / `recall` first slice；drift check、release readiness 这类只读入口仍在后续候选范围。设计说明见 [跨 session 续接模型](session-continuity.md)。
+
 ## 公开发行边界
 
 公开项目保留稳定的小主链路：

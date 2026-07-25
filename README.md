@@ -11,7 +11,7 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 
 它面向**个人开发者和小团队**：不追求企业级流程治理，而是用最少的约束把需求、规范、实现和收口串成一条可追踪、可交接的轻工作流。多数需求走 brief 就够，只有真正复杂的场景才升级到完整模式，避免小改动背上重流程的负担。
 
-它不是完整的 agent 框架，不是项目管理系统，也不是个人工作区的镜像。v0.1 是经过公开发行审查的一条主链路，让读者可以完整体验：需求进入、需求契约、任务拆解、OpenSpec/Superpowers 衔接、合规检查、handover、session 收口和经验沉淀。
+它不是完整的 agent 框架，不是项目管理系统，也不是个人工作区的镜像。公开版保留一条经过发行审查的主链路，让读者可以完整体验：需求进入、需求契约、任务拆解、OpenSpec/Superpowers 衔接、合规检查、handover、session 收口和经验沉淀；`0.2.0-alpha` 进一步加入单仓 `state` / `recall` 读取端。
 
 这条主链路包括：
 
@@ -42,9 +42,9 @@ zimaflow 的入口刻意保持低记忆负担：
 
 ## 工作流一眼看懂
 
-![zimaflow v0.1 轻工作流概览](docs/assets/zimaflow-readme-flow.svg)
+![zimaflow 公开版轻工作流概览](docs/assets/zimaflow-readme-flow.svg)
 
-这张图只保留 v0.1 主链路；完整协同全景图见延伸说明：[一张图看懂 AI Coding 轻工作流：从需求入口到经验回流](https://mp.weixin.qq.com/s/TqgHNpYo37qC0gvXOtuNCg)。
+这张图只保留公开版主链路；完整协同全景图见延伸说明：[一张图看懂 AI Coding 轻工作流：从需求入口到经验回流](https://mp.weixin.qq.com/s/TqgHNpYo37qC0gvXOtuNCg)。
 
 ## 可靠性机制
 
@@ -56,7 +56,7 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 - **交接 Gate**：`handover-manager` 保存下一次 session 必须知道的状态、未决事项和 Guardrail 承接。
 - **收口 Gate**：`session-close-reconciler` 在 final response 前核对 hotfix / rewind / secrets、文档同步和经验候选。
 
-这些 Gate 默认是提醒和审查，不是强制阻断；v0.1 的目标是让个人和小团队先得到可解释、可交接的纪律，而不是一开始就引入重型平台。
+这些 Gate 默认是提醒和审查，不是强制阻断；公开版的目标是让个人和小团队先得到可解释、可交接的纪律，而不是一开始就引入重型平台。
 
 ## 可以从这里学到什么
 
@@ -68,7 +68,7 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 - 如何给存量项目建立 thin context index，让后续 agent session 少做重复考古。
 - 如何在 session 收尾时检查文档、handover、secrets 和经验候选，让上下文不只停留在对话窗口里。
 
-## v0.1 纳入内容
+## 当前纳入内容
 
 | 范围 | 文件 | 状态 |
 |------|------|------|
@@ -85,7 +85,7 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 | 参考表 | `references/*.md` | 纳入，已脱敏 |
 | agent 规则 | `rules/` | 纳入 |
 | 基础安装脚本 | `scripts/install.sh` | 纳入 |
-| 最小 CLI | `bin/zimaflow` | 纳入 |
+| CLI 读取端 | `bin/zimaflow` | 纳入（含 `close`、单仓 `state` / `recall`、非阻断 hook 提醒） |
 
 ## 后续规划
 
@@ -93,12 +93,15 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 
 | 方向 | 亮点 |
 |------|------|
+| 跨 session 续接 | 单仓 `state` / `recall` first slice 已纳入；后续继续补发布前检查和漂移检查。 |
+| CLI 读取端 | 在 `close` 之外逐步公开状态读取、恢复提醒、发布前检查和漂移检查。 |
+| Guardrails Catalog | 给高风险规则稳定命名，默认 soft gate，方便 review 和 handover 引用。 |
 | 产品原型评审（`proto-review`） | 想法或 PRD 一键转成可评审原型，先看得见再写 spec。 |
 | 一键初始化器 | 一条命令接入新项目，自动配好 OpenSpec、规则和 skills。 |
-| 完整 CLI | 在 `close` 之外补上状态跟踪、知识淘汰复查和交接漂移检查。 |
-| 知识使用闭环 | 经验从"靠记忆"变成可追踪、可淘汰的账本。 |
+| 知识使用闭环 | 经验从"靠记忆"变成可追踪、可淘汰的账本；公开前需要抽象和脱敏。 |
 
 完整范围与规划见 [docs/open-source-boundary.md](docs/open-source-boundary.md)。
+v0.2 alpha 的公开规划见 [docs/v0.2-alpha-plan.md](docs/v0.2-alpha-plan.md)，跨 session 续接模型见 [docs/session-continuity.md](docs/session-continuity.md)，护栏边界见 [docs/guardrails.md](docs/guardrails.md)。
 
 ## 目录关系
 
@@ -108,12 +111,12 @@ zimaflow/
   rules/               # 跨 skill 共享约束
   references/          # 辅助模板、矩阵和背景说明
   docs/                # 面向外部读者的人类文档
-  examples/demo/       # v0.1 完整体验入口
+  examples/demo/       # 公开版完整体验入口
   scripts/             # 基础安装脚本
   bin/                 # 最小 zimaflow CLI
 ```
 
-`skills/` 描述 agent 应该怎么执行；`rules/` 保存跨 skill 的共同约束；`references/` 放可被 skill 引用的辅助材料；`docs/` 面向读者解释项目；`examples/demo/` 是最快体验 v0.1 主链路的入口。
+`skills/` 描述 agent 应该怎么执行；`rules/` 保存跨 skill 的共同约束；`references/` 放可被 skill 引用的辅助材料；`docs/` 面向读者解释项目；`examples/demo/` 是最快体验公开版主链路的入口。
 
 ## 快速开始
 
@@ -149,13 +152,15 @@ scripts/install.sh --target "$HOME/.zimaflow"
 
 安装脚本只复制公开仓内容，不初始化 OpenSpec、不创建项目注册表、不修改 shell profile 或 agent 配置。安装后可让 agent 从 `$HOME/.zimaflow/SKILL.md` 这个显式入口开始。demo 运行所需的环境变量在 [examples/demo/README.md](examples/demo/README.md) 中说明。
 
-`bin/zimaflow` 是可选的最小 CLI：它提供 `close`、`close --json` 和非阻断 hook 提醒，适合作为全局收口探针，不是完整工作流引擎。想在任意项目里直接运行 `zimaflow close` 时，再把它安装到 PATH 目录：
+`bin/zimaflow` 是可选 CLI：它提供 `close`、单仓 `state` / `recall` 和非阻断 hook 提醒，适合作为全局收口与续接探针，不是完整工作流引擎。想在任意项目里直接运行 `zimaflow close` 或 `zimaflow recall` 时，再把它安装到 PATH 目录：
 
 ```bash
 scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"
 ```
 
 `skills/` 是 zimaflow 的中立源文件。Codex、WorkBuddy 等在你显式指定源目录或运行环境支持递归读取时，优先直接使用仓库里的源文件，不需要改成特殊目录名；如果你希望某个 agent 走自动发现，仍要按该 agent 实际扫描的结构生成 adapter。
+
+CLI 命令说明见 [docs/cli-reference.md](docs/cli-reference.md)。
 
 只有在你希望 **Claude Code 自动发现** zimaflow skills 时，才需要生成一层扁平 adapter。原因是 Claude Code 的全局 skill 发现只扫描 `<skill-root>/<skill>/SKILL.md` 这一层，不会递归理解 `skills/*.md` 这样的源结构。
 

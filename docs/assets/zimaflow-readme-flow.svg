@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1180" height="360" viewBox="0 0 1180 360" role="img" aria-labelledby="title desc">
-  <title id="title">zimaflow v0.1 轻工作流概览</title>
+  <title id="title">zimaflow 公开版轻工作流概览</title>
   <desc id="desc">从需求入口经过 sdd-router、brief 或 PRD、轻量实现或 OpenSpec 完整模式、verify review，最终进入 close、handover 和 learn 的主链路。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -37,7 +37,7 @@
   <path d="M38 58 C210 18, 360 32, 520 58 S870 92, 1142 46" stroke="#1e3a5f" stroke-width="1.5" fill="none" opacity="0.65"/>
   <path d="M44 303 C260 337, 510 325, 698 301 S982 267, 1138 311" stroke="#1e3a5f" stroke-width="1.5" fill="none" opacity="0.65"/>
 
-  <text x="50" y="58" class="title">zimaflow v0.1 轻工作流概览</text>
+  <text x="50" y="58" class="title">zimaflow 公开版轻工作流概览</text>
   <text x="50" y="86" class="subtitle">用最少的约束，把一句需求整理成可追踪、可交接、可收口的实现闭环。</text>
 
   <g filter="url(#soft-shadow)">

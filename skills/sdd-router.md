@@ -30,18 +30,19 @@ description: >
 
 ### Step 1：识别项目
 
-读取项目注册表 `$ZIMAFLOW_PROJECTS_DIR/PROJECT_REGISTRY.md`。
+如果用户配置了 `$ZIMAFLOW_PROJECTS_DIR/PROJECT_REGISTRY.md`，优先读取项目注册表；否则从用户消息、当前 git 仓库和人工确认中识别项目。公开版不要求项目注册表存在，也不会自动创建或修改它。
 
-- 如果用户消息中提到了项目名（或代码路径），匹配注册表中的项目
-- 如果没有提到，列出所有"活跃"状态的项目，让用户选择
-- 如果是全新项目（注册表中没有），询问用户：
+- 如果用户消息中提到了项目名（或代码路径），优先匹配注册表中的项目；没有注册表时，使用当前仓库路径并向用户确认项目名
+- 如果没有提到且注册表存在，列出所有"活跃"状态的项目，让用户选择
+- 如果是全新项目或没有注册表，询问用户：
   - 项目名称
   - 代码仓库路径
-  - 然后自动追加到注册表，并创建 `$ZIMAFLOW_PROJECTS_DIR/<project-name>/docs/` 目录
+  - 项目文档目录（如有）；不要自动追加注册表或创建目录，除非用户明确要求
 
-匹配成功后，从注册表获取两个关键路径：
+识别成功后，得到两个关键路径：
 - `code_repo`：代码仓库路径
 - `docs_dir`：项目文档路径（用于 handover 读写）
+  - 如果没有 `docs_dir`，提示用户指定；轻量模式也可把 handover 放在用户明确给出的路径中
 
 ### Step 1.5：检查 zimaflow 初始化状态
 
@@ -56,7 +57,7 @@ cd <code_repo>
                                                            && echo "✅ config.yaml（有内容）" || echo "❌ config.yaml（缺失或空壳）"
 [ -f ".claude/rules/openspec-config-awareness.md" ] || \
 [ -f ".codex/rules/openspec-config-awareness.md" ]         && echo "✅ Bridge Rule" || echo "❌ Bridge Rule"
-# 项目注册状态在 Step 1 已确认——如果是全新项目，Step 1 会发现注册表中没有
+# 项目注册表是可选进阶上下文；没有注册表时，以当前仓库和用户确认的信息为准
 ```
 
 **判断逻辑**：
@@ -138,7 +139,7 @@ cat "$ZIMAFLOW_HOME/references/knowledge-anchor-map.md"
 
 - 命中高信号锚点时，读取对应 `$ZIMAFLOW_HOME/references/lessons-common.md` 或项目 `lessons.md` 中的 knowledge ID 条目。
 - 最多加载 3 条；如果超过 3 条，优先加载与风险最高维度相关的条目。
-- 加载后追加 `loaded` 事件到 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`，字段遵循 `$ZIMAFLOW_HOME/references/knowledge-usage-guide.md`。
+- 如果项目启用了知识使用账本，加载后可追加 `loaded` 事件到 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`，字段遵循 `$ZIMAFLOW_HOME/references/knowledge-usage-guide.md`；未启用时，在输出中列出已加载 knowledge ID 即可。
 - 如果触碰高风险主题但没有对应锚点，输出 Learn 候选："缺少 {主题} 的锚点/知识条目"。
 
 路由输出中追加：
@@ -159,7 +160,7 @@ cat "$ZIMAFLOW_HOME/references/knowledge-anchor-map.md"
 
 判断原则：
 
-- 如果项目注册表或项目文档已经声明协作模式，优先采用声明值。
+- 如果项目注册表（可选）或项目文档已经声明协作模式，优先采用声明值。
 - 如果没有声明，根据用户需求和代码仓线索推断，并在路由结果中标注"推断"。
 - 拿不准时不要静默升级到团队多环境项目；最多标记为"团队协作项目（待确认）"。
 

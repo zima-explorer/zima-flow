@@ -26,14 +26,14 @@
 | config.yaml 规则变更 | Bridge Rule 引用是否仍正确 | 建议 | Bridge Rule 只指路，但要确认指的路没断 |
 | 踩坑 / 调试循环 / 方向返工 | Learn 候选扫描结果；确认后写入项目 `lessons.md` 或 `lessons-common.md` | 建议 | reconciler 必须输出候选或明确"未发现高置信候选"，写入由 learn 在用户确认后执行 |
 | 知识锚点映射新增/变更 | `references/knowledge-anchor-map.md` + zimaflow `README.md` | 必须 | 新锚点会改变路由前置知识加载行为，必须可发现 |
-| 知识使用账本规则新增/变更 | `references/knowledge-usage-guide.md` + `learn/SKILL.md` + `session-close-reconciler/SKILL.md` | 必须 | 账本字段、事件类型、淘汰规则必须与执行 Skill 保持一致 |
-| 知识使用事件产生 | `references/knowledge-usage-ledger.jsonl` | 建议 | loaded/cited/applied/challenged 只追加 JSONL，不直接改 lesson 正文 |
+| 知识使用账本规则新增/变更 | `references/knowledge-usage-guide.md` + `learn/SKILL.md` + `session-close-reconciler/SKILL.md` | 必须 | 账本是可选进阶能力；启用时字段、事件类型、淘汰规则必须与执行 Skill 保持一致 |
+| 知识使用事件产生 | `references/knowledge-usage-ledger.jsonl` | 建议 | 仅在项目启用 usage ledger 时追加；loaded/cited/applied/challenged 只追加 JSONL，不直接改 lesson 正文 |
 | lesson 稳定 ID 新增/变更 | `references/lessons-common.md` 或项目 `lessons.md` + `references/knowledge-anchor-map.md`（如被锚点引用） | 必须 | ID 是 ledger 和 handover 的稳定引用，改 ID 需同步引用方 |
 | 用户纠正关键流程 / 路径 / 脱敏 / 状态判断 | Learn 候选扫描结果 | 建议 | 例如真源/runtime 路径误用、公开内容脱敏、验收环境 与上线状态修正 |
 | 技术决策（选型、架构变更） | `Decisions/` 或 `design.md` | 必须 | 决策必须有文档可追溯 |
 | 依赖变更（新增/升级/移除） | 项目 `PROGRESS.md` 或 `CHANGELOG` | 建议 | 记录依赖变化及原因 |
 | 工时估算偏差发现 | `workload-dict.md` 或项目 `project-workload-overrides.md` | 建议 | 校准工时基准，下次更准 |
-| 项目注册表变更 | `PROJECT_REGISTRY.md` | 必须 | 新项目、路径变更、状态变更 |
+| 项目注册表变更 | `PROJECT_REGISTRY.md` | 建议 | 项目注册表是可选进阶上下文；新项目、路径变更、状态变更可记录，但公开版不强依赖 |
 | zimaflow 自身改动 | zimaflow `README.md` + 版本记录 | 必须 | 更新 Skill 列表、设计决策、版本记录 |
 | zimaflow 自身改动来自流程缺口或真实踩坑 | Learn 候选扫描结果 | 建议 | 规则直接回写不能替代 lesson 统计，至少输出候选供用户确认 |
 | zimaflow 自身改动 | 公开路线图或 issue | 建议 | 更新待实施方案或参考资料 |

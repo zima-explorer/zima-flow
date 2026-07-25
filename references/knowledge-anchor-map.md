@@ -1,7 +1,7 @@
 # 知识锚点表
 
 > 目的：帮助 Agent 在路由、规划或实现前加载合适知识。
-> 这是轻量映射表，不是搜索索引。锚点命中时，读取对应 lesson，并向 `knowledge-usage-ledger.jsonl` 追加使用事件。
+> 这是轻量映射表，不是搜索索引。锚点命中时，读取对应 lesson；如果项目启用了知识使用账本，再向 `knowledge-usage-ledger.jsonl` 追加使用事件。
 
 ## 锚点规则
 

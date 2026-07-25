@@ -55,6 +55,9 @@ fi
 
 "$repo_root/bin/zimaflow" --version | grep -q '^zimaflow '
 
+"$repo_root/tests/state.sh"
+"$repo_root/tests/recall.sh"
+
 json_output="$(cd "$non_git_dir" && "$repo_root/bin/zimaflow" close --json || true)"
 printf '%s\n' "$json_output" | grep -q '"git_status":"not_git_repo"'
 printf '%s\n' "$json_output" | grep -q '"next_action":"need_manual_confirmation"'

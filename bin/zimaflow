@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0-alpha"
 
 usage() {
   cat <<'EOF'
@@ -9,6 +9,10 @@ zimaflow - lightweight workflow guardrails
 
 用法：
   zimaflow close [--json]
+  zimaflow state [--json]
+  zimaflow state init <change> [options]
+  zimaflow state update <change> [options]
+  zimaflow recall [--json] [--days N] [--summary-lines N]
   zimaflow install-hooks
   zimaflow --help
   zimaflow --version
@@ -16,7 +20,29 @@ zimaflow - lightweight workflow guardrails
 命令：
   close           运行轻量 session 收口检查。
   close --json    输出稳定 JSON，供 agent 或工具读取。
+  state           汇总 openspec/changes/*/.zimaflow-state.yaml。
+  state --json    输出 state 汇总 JSON。
+  state init      初始化某个 change 的 .zimaflow-state.yaml。
+  state update    更新某个 change 的常用状态字段。
+  recall          汇总单仓 active change、handover 和 bit-rot 提醒。
+  recall --json   输出 recall 汇总 JSON。
   install-hooks   在当前 git 仓库安装非阻断提醒 hooks。
+
+state 选项：
+  --phase <phase>
+  --mode <mode>
+  --contract <path>
+  --decision <path>
+  --branch <branch>
+  --worktree <path>
+  --verify <status>
+  --full-tests <status>
+  --last-command <command>
+  --last-result <result>
+  --evidence-path <path-or-url>
+  --blocked-reason <reason>
+  --archive-status <status>
+  --handover <path>
 EOF
 }
 
@@ -32,18 +58,831 @@ find_git_root() {
   git rev-parse --show-toplevel 2>/dev/null || true
 }
 
+find_state_root() {
+  if [ -d "openspec/changes" ]; then
+    pwd
+    return 0
+  fi
+  find_git_root
+}
+
+yaml_clean_value() {
+  sed \
+    -e 's/^"//' \
+    -e 's/"$//' \
+    -e "s/^'//" \
+    -e "s/'$//" \
+    -e "s/''/'/g"
+}
+
+yaml_scalar() {
+  local value="$1"
+  value="${value//$'\n'/ }"
+  value="$(printf '%s' "$value" | sed "s/'/''/g")"
+  printf "'%s'" "$value"
+}
+
+state_print_string() {
+  local indent="$1"
+  local key="$2"
+  local value="$3"
+  printf '%s%s: ' "$indent" "$key"
+  yaml_scalar "$value"
+  printf '\n'
+}
+
+yaml_top_value() {
+  local file="$1"
+  local key="$2"
+  awk -v key="$key:" '
+    $1 == key {
+      sub("^[[:space:]]*" key "[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$file" 2>/dev/null | yaml_clean_value
+}
+
+yaml_nested_value() {
+  local file="$1"
+  local section="$2"
+  local key="$3"
+  awk -v section="$section:" -v key="$key:" '
+    $1 == section { in_section = 1; next }
+    in_section && $0 !~ /^[[:space:]]/ { in_section = 0 }
+    in_section && $1 == key {
+      sub("^[[:space:]]*" key "[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$file" 2>/dev/null | yaml_clean_value
+}
+
+state_files() {
+  local root="$1"
+  local changes_dir="$root/openspec/changes"
+  if [ -d "$changes_dir" ]; then
+    find "$changes_dir" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null | sort
+  fi
+}
+
+state_change_from_path() {
+  local root="$1"
+  local file="$2"
+  local changes_dir="$root/openspec/changes"
+  local rel="${file#"$changes_dir"/}"
+  printf '%s' "${rel%%/*}"
+}
+
+state_record() {
+  local root="$1"
+  local file="$2"
+  local fallback_change
+  fallback_change="$(state_change_from_path "$root" "$file")"
+
+  local change_id phase mode archive_status
+  change_id="$(yaml_top_value "$file" "change_id")"
+  phase="$(yaml_top_value "$file" "phase")"
+  mode="$(yaml_top_value "$file" "mode")"
+  archive_status="$(yaml_nested_value "$file" "archive" "status")"
+
+  [ -n "$change_id" ] || change_id="$fallback_change"
+  [ -n "$phase" ] || phase="unknown"
+  [ -n "$mode" ] || mode="unknown"
+  [ -n "$archive_status" ] || archive_status="unknown"
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$change_id" "$phase" "$mode" "$archive_status" "$file"
+}
+
+state_records() {
+  local root="$1"
+  local file
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    state_record "$root" "$file"
+  done <<EOF
+$(state_files "$root")
+EOF
+}
+
+state_active_count() {
+  awk -F '\t' 'NF && $2 != "closed" { count++ } END { print count + 0 }'
+}
+
+state_path_for_change() {
+  local root="$1"
+  local change="$2"
+  printf '%s/openspec/changes/%s/.zimaflow-state.yaml' "$root" "$change"
+}
+
+validate_change_id() {
+  local change="$1"
+  if [ -z "$change" ] || printf '%s' "$change" | grep -Eq '(^\.)|(/)|(^$)'; then
+    printf '错误：无效 change id：%s\n' "$change" >&2
+    return 2
+  fi
+}
+
+now_iso() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+ts_to_ymd() {
+  printf '%s' "$1" | sed -n 's/^\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\).*/\1/p'
+}
+
+ymd_to_epoch() {
+  local ymd="$1"
+  [ -n "$ymd" ] || return 1
+  if date -j -f "%Y-%m-%d" "$ymd" '+%s' >/dev/null 2>&1; then
+    date -j -f "%Y-%m-%d" "$ymd" '+%s'
+  else
+    date -d "$ymd" '+%s' 2>/dev/null
+  fi
+}
+
+file_mtime_epoch() {
+  local file="$1"
+  [ -e "$file" ] || return 1
+  stat -c %Y "$file" 2>/dev/null || stat -f %m "$file" 2>/dev/null
+}
+
+days_since_epoch() {
+  local then_epoch="$1"
+  local now
+  now="$(date '+%s')"
+  echo $(( (now - then_epoch) / 86400 ))
+}
+
+resolve_artifact_path() {
+  local root="$1"
+  local path="$2"
+  case "$path" in
+    "") printf '' ;;
+    /*) printf '%s' "$path" ;;
+    *) printf '%s/%s' "$root" "$path" ;;
+  esac
+}
+
+json_string_array() {
+  local lines="$1"
+  local first="yes"
+  printf '['
+  if [ -n "$lines" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if [ "$first" = "no" ]; then
+        printf ','
+      fi
+      json_string "$line"
+      first="no"
+    done <<EOF
+$lines
+EOF
+  fi
+  printf ']'
+}
+
 print_close_json() {
   local repository="$1"
   local git_status="$2"
   local dirty_count="$3"
-  local next_action="$4"
+  local active_state_count="$4"
+  local active_state_changes="$5"
+  local next_action="$6"
 
   printf '{'
   printf '"repository":'; json_string "$repository"; printf ','
   printf '"git_status":'; json_string "$git_status"; printf ','
   printf '"dirty_count":%s,' "$dirty_count"
+  printf '"active_state_count":%s,' "$active_state_count"
+  printf '"active_state_changes":'; json_string_array "$active_state_changes"; printf ','
   printf '"next_action":'; json_string "$next_action"
   printf '}\n'
+}
+
+print_state_json() {
+  local repository="$1"
+  local records="$2"
+  local active_count="$3"
+  local first="yes"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"active_count":%s,' "$active_count"
+  printf '"states":['
+  if [ -n "$records" ]; then
+    while IFS="$(printf '\t')" read -r change_id phase mode archive_status path; do
+      [ -n "$change_id" ] || continue
+      if [ "$first" = "no" ]; then
+        printf ','
+      fi
+      printf '{'
+      printf '"change_id":'; json_string "$change_id"; printf ','
+      printf '"phase":'; json_string "$phase"; printf ','
+      printf '"mode":'; json_string "$mode"; printf ','
+      printf '"archive_status":'; json_string "$archive_status"; printf ','
+      printf '"path":'; json_string "$path"
+      printf '}'
+      first="no"
+    done <<EOF
+$records
+EOF
+  fi
+  printf ']}\n'
+}
+
+state_load_or_defaults() {
+  local file="$1"
+  local change="$2"
+
+  STATE_CHANGE_ID="$change"
+  STATE_PHASE="contract_confirmed"
+  STATE_MODE="full"
+  STATE_CONTRACT_PATH=""
+  STATE_CONTRACT_STATUS="confirmed"
+  STATE_CONTRACT_CONFIRMED_AT=""
+  STATE_DECISION_PATH=""
+  STATE_DECISION_STATUS="confirmed"
+  STATE_CHANGE_PATH="openspec/changes/$change"
+  STATE_PROPOSAL_PATH="openspec/changes/$change/proposal.md"
+  STATE_DESIGN_PATH="openspec/changes/$change/design.md"
+  STATE_TASKS_PATH="openspec/changes/$change/tasks.md"
+  STATE_SPEC_REVIEW_CONFIRMED="false"
+  STATE_SPEC_REVIEW_CONFIRMED_AT=""
+  STATE_ISOLATION=""
+  STATE_BRANCH=""
+  STATE_WORKTREE_PATH=""
+  STATE_STARTED_AT=""
+  STATE_COMPLETED_AT=""
+  STATE_OPSX_VERIFY="not_run"
+  STATE_FULL_TESTS="not_run"
+  STATE_LAST_COMMAND=""
+  STATE_LAST_RESULT=""
+  STATE_EVIDENCE_PATH=""
+  STATE_BLOCKED_REASON=""
+  STATE_VERIFIED_AT=""
+  STATE_ARCHIVE_STATUS="not_archived"
+  STATE_ARCHIVED_AT=""
+  STATE_DOCS_SYNCED="false"
+  STATE_HANDOVER_PATH=""
+  STATE_HANDOVER_UPDATED_AT=""
+
+  if [ -f "$file" ]; then
+    STATE_CHANGE_ID="$(yaml_top_value "$file" "change_id")"
+    [ -n "$STATE_CHANGE_ID" ] || STATE_CHANGE_ID="$change"
+    STATE_PHASE="$(yaml_top_value "$file" "phase")"
+    [ -n "$STATE_PHASE" ] || STATE_PHASE="unknown"
+    STATE_MODE="$(yaml_top_value "$file" "mode")"
+    [ -n "$STATE_MODE" ] || STATE_MODE="unknown"
+    STATE_CONTRACT_PATH="$(yaml_nested_value "$file" "requirement_contract" "path")"
+    STATE_CONTRACT_STATUS="$(yaml_nested_value "$file" "requirement_contract" "status")"
+    STATE_CONTRACT_CONFIRMED_AT="$(yaml_nested_value "$file" "requirement_contract" "confirmed_at")"
+    STATE_DECISION_PATH="$(yaml_nested_value "$file" "decision" "path")"
+    STATE_DECISION_STATUS="$(yaml_nested_value "$file" "decision" "status")"
+    STATE_CHANGE_PATH="$(yaml_nested_value "$file" "openspec" "change_path")"
+    STATE_PROPOSAL_PATH="$(yaml_nested_value "$file" "openspec" "proposal_path")"
+    STATE_DESIGN_PATH="$(yaml_nested_value "$file" "openspec" "design_path")"
+    STATE_TASKS_PATH="$(yaml_nested_value "$file" "openspec" "tasks_path")"
+    STATE_SPEC_REVIEW_CONFIRMED="$(yaml_nested_value "$file" "openspec" "spec_review_confirmed")"
+    STATE_SPEC_REVIEW_CONFIRMED_AT="$(yaml_nested_value "$file" "openspec" "spec_review_confirmed_at")"
+    STATE_ISOLATION="$(yaml_nested_value "$file" "implementation" "isolation")"
+    STATE_BRANCH="$(yaml_nested_value "$file" "implementation" "branch")"
+    STATE_WORKTREE_PATH="$(yaml_nested_value "$file" "implementation" "worktree_path")"
+    STATE_STARTED_AT="$(yaml_nested_value "$file" "implementation" "started_at")"
+    STATE_COMPLETED_AT="$(yaml_nested_value "$file" "implementation" "completed_at")"
+    STATE_OPSX_VERIFY="$(yaml_nested_value "$file" "verification" "opsx_verify")"
+    STATE_FULL_TESTS="$(yaml_nested_value "$file" "verification" "full_tests")"
+    STATE_LAST_COMMAND="$(yaml_nested_value "$file" "verification" "last_command")"
+    STATE_LAST_RESULT="$(yaml_nested_value "$file" "verification" "last_result")"
+    STATE_EVIDENCE_PATH="$(yaml_nested_value "$file" "verification" "evidence_path")"
+    STATE_BLOCKED_REASON="$(yaml_nested_value "$file" "verification" "blocked_reason")"
+    STATE_VERIFIED_AT="$(yaml_nested_value "$file" "verification" "verified_at")"
+    STATE_ARCHIVE_STATUS="$(yaml_nested_value "$file" "archive" "status")"
+    STATE_ARCHIVED_AT="$(yaml_nested_value "$file" "archive" "archived_at")"
+    STATE_DOCS_SYNCED="$(yaml_nested_value "$file" "archive" "docs_synced")"
+    STATE_HANDOVER_PATH="$(yaml_nested_value "$file" "handover" "latest_path")"
+    STATE_HANDOVER_UPDATED_AT="$(yaml_nested_value "$file" "handover" "updated_at")"
+  fi
+
+  [ -n "$STATE_CONTRACT_STATUS" ] || STATE_CONTRACT_STATUS="confirmed"
+  [ -n "$STATE_DECISION_STATUS" ] || STATE_DECISION_STATUS="confirmed"
+  [ -n "$STATE_CHANGE_PATH" ] || STATE_CHANGE_PATH="openspec/changes/$change"
+  [ -n "$STATE_PROPOSAL_PATH" ] || STATE_PROPOSAL_PATH="openspec/changes/$change/proposal.md"
+  [ -n "$STATE_DESIGN_PATH" ] || STATE_DESIGN_PATH="openspec/changes/$change/design.md"
+  [ -n "$STATE_TASKS_PATH" ] || STATE_TASKS_PATH="openspec/changes/$change/tasks.md"
+  [ -n "$STATE_SPEC_REVIEW_CONFIRMED" ] || STATE_SPEC_REVIEW_CONFIRMED="false"
+  [ -n "$STATE_OPSX_VERIFY" ] || STATE_OPSX_VERIFY="not_run"
+  [ -n "$STATE_FULL_TESTS" ] || STATE_FULL_TESTS="not_run"
+  [ -n "$STATE_ARCHIVE_STATUS" ] || STATE_ARCHIVE_STATUS="not_archived"
+  [ -n "$STATE_DOCS_SYNCED" ] || STATE_DOCS_SYNCED="false"
+}
+
+state_write_file() {
+  local file="$1"
+  mkdir -p "$(dirname "$file")"
+	{
+	  printf 'schema_version: 1\n'
+	  state_print_string '' 'change_id' "$STATE_CHANGE_ID"
+	  state_print_string '' 'phase' "$STATE_PHASE"
+	  state_print_string '' 'mode' "$STATE_MODE"
+	  printf '\n'
+	  printf 'requirement_contract:\n'
+	  state_print_string '  ' 'path' "$STATE_CONTRACT_PATH"
+	  state_print_string '  ' 'status' "$STATE_CONTRACT_STATUS"
+	  state_print_string '  ' 'confirmed_at' "$STATE_CONTRACT_CONFIRMED_AT"
+	  printf '\n'
+	  printf 'decision:\n'
+	  state_print_string '  ' 'path' "$STATE_DECISION_PATH"
+	  state_print_string '  ' 'status' "$STATE_DECISION_STATUS"
+	  printf '\n'
+	  printf 'openspec:\n'
+	  state_print_string '  ' 'change_path' "$STATE_CHANGE_PATH"
+	  state_print_string '  ' 'proposal_path' "$STATE_PROPOSAL_PATH"
+	  state_print_string '  ' 'design_path' "$STATE_DESIGN_PATH"
+	  state_print_string '  ' 'tasks_path' "$STATE_TASKS_PATH"
+	  printf '  spec_review_confirmed: %s\n' "$STATE_SPEC_REVIEW_CONFIRMED"
+	  state_print_string '  ' 'spec_review_confirmed_at' "$STATE_SPEC_REVIEW_CONFIRMED_AT"
+	  printf '\n'
+	  printf 'implementation:\n'
+	  state_print_string '  ' 'isolation' "$STATE_ISOLATION"
+	  state_print_string '  ' 'branch' "$STATE_BRANCH"
+	  state_print_string '  ' 'worktree_path' "$STATE_WORKTREE_PATH"
+	  state_print_string '  ' 'started_at' "$STATE_STARTED_AT"
+	  state_print_string '  ' 'completed_at' "$STATE_COMPLETED_AT"
+	  printf '\n'
+	  printf 'verification:\n'
+	  state_print_string '  ' 'opsx_verify' "$STATE_OPSX_VERIFY"
+	  state_print_string '  ' 'full_tests' "$STATE_FULL_TESTS"
+	  state_print_string '  ' 'last_command' "$STATE_LAST_COMMAND"
+	  state_print_string '  ' 'last_result' "$STATE_LAST_RESULT"
+	  state_print_string '  ' 'evidence_path' "$STATE_EVIDENCE_PATH"
+	  state_print_string '  ' 'blocked_reason' "$STATE_BLOCKED_REASON"
+	  state_print_string '  ' 'verified_at' "$STATE_VERIFIED_AT"
+	  printf '\n'
+	  printf 'archive:\n'
+	  state_print_string '  ' 'status' "$STATE_ARCHIVE_STATUS"
+	  state_print_string '  ' 'archived_at' "$STATE_ARCHIVED_AT"
+	  printf '  docs_synced: %s\n\n' "$STATE_DOCS_SYNCED"
+	  printf 'handover:\n'
+	  state_print_string '  ' 'latest_path' "$STATE_HANDOVER_PATH"
+	  state_print_string '  ' 'updated_at' "$STATE_HANDOVER_UPDATED_AT"
+	  printf '\n'
+	  state_print_string '' 'updated_at' "$(now_iso)"
+	  state_print_string '' 'updated_by' 'zimaflow'
+	} > "$file"
+}
+
+run_state() {
+  local format="${1:-human}"
+  local root
+  root="$(find_state_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      print_state_json "" "" 0
+      return 2
+    fi
+    printf 'Zimaflow state\n\n当前目录不是 git 仓库。\n'
+    return 2
+  fi
+
+  local records active_count
+  records="$(state_records "$root")"
+  active_count="$(printf '%s\n' "$records" | state_active_count)"
+
+  if [ "$format" = "json" ]; then
+    print_state_json "$root" "$records" "$active_count"
+    return 0
+  fi
+
+  printf 'Zimaflow state\n\n'
+  printf 'Repository: %s\n\n' "$root"
+  if [ -z "$records" ]; then
+    printf 'State files: none\nActive changes: 0\n'
+    return 0
+  fi
+
+  while IFS="$(printf '\t')" read -r change_id phase mode archive_status path; do
+    [ -n "$change_id" ] || continue
+    printf '  - %s  phase=%s  mode=%s  archive=%s\n' "$change_id" "$phase" "$mode" "$archive_status"
+    printf '    %s\n' "$path"
+  done <<EOF
+$records
+EOF
+  printf '\nActive changes: %s\n' "$active_count"
+}
+
+state_apply_options() {
+  local command="$1"
+  shift
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --phase)
+        [ -n "${2:-}" ] || { printf '错误：--phase 缺少值\n' >&2; return 2; }
+        STATE_PHASE="$2"; shift 2 ;;
+      --mode)
+        [ -n "${2:-}" ] || { printf '错误：--mode 缺少值\n' >&2; return 2; }
+        STATE_MODE="$2"; shift 2 ;;
+      --contract)
+        [ -n "${2:-}" ] || { printf '错误：--contract 缺少值\n' >&2; return 2; }
+        STATE_CONTRACT_PATH="$2"
+        STATE_CONTRACT_STATUS="confirmed"
+        [ -n "$STATE_CONTRACT_CONFIRMED_AT" ] || STATE_CONTRACT_CONFIRMED_AT="$(now_iso)"
+        shift 2 ;;
+      --decision)
+        [ -n "${2:-}" ] || { printf '错误：--decision 缺少值\n' >&2; return 2; }
+        STATE_DECISION_PATH="$2"
+        STATE_DECISION_STATUS="confirmed"
+        shift 2 ;;
+      --branch)
+        [ -n "${2:-}" ] || { printf '错误：--branch 缺少值\n' >&2; return 2; }
+        STATE_BRANCH="$2"
+        STATE_ISOLATION="branch"
+        shift 2 ;;
+      --worktree)
+        [ -n "${2:-}" ] || { printf '错误：--worktree 缺少值\n' >&2; return 2; }
+        STATE_WORKTREE_PATH="$2"
+        STATE_ISOLATION="worktree"
+        shift 2 ;;
+      --verify)
+        [ -n "${2:-}" ] || { printf '错误：--verify 缺少值\n' >&2; return 2; }
+        STATE_OPSX_VERIFY="$2"
+        [ -n "$STATE_VERIFIED_AT" ] || STATE_VERIFIED_AT="$(now_iso)"
+        shift 2 ;;
+      --full-tests)
+        [ -n "${2:-}" ] || { printf '错误：--full-tests 缺少值\n' >&2; return 2; }
+        STATE_FULL_TESTS="$2"
+        [ -n "$STATE_VERIFIED_AT" ] || STATE_VERIFIED_AT="$(now_iso)"
+        shift 2 ;;
+      --last-command)
+        [ -n "${2:-}" ] || { printf '错误：--last-command 缺少值\n' >&2; return 2; }
+        STATE_LAST_COMMAND="$2"; shift 2 ;;
+      --last-result)
+        [ -n "${2:-}" ] || { printf '错误：--last-result 缺少值\n' >&2; return 2; }
+        STATE_LAST_RESULT="$2"
+        [ -n "$STATE_VERIFIED_AT" ] || STATE_VERIFIED_AT="$(now_iso)"
+        shift 2 ;;
+      --evidence-path)
+        [ -n "${2:-}" ] || { printf '错误：--evidence-path 缺少值\n' >&2; return 2; }
+        STATE_EVIDENCE_PATH="$2"; shift 2 ;;
+      --blocked-reason)
+        [ "${2+x}" ] || { printf '错误：--blocked-reason 缺少值\n' >&2; return 2; }
+        STATE_BLOCKED_REASON="$2"; shift 2 ;;
+      --archive-status)
+        [ -n "${2:-}" ] || { printf '错误：--archive-status 缺少值\n' >&2; return 2; }
+        STATE_ARCHIVE_STATUS="$2"
+        if [ "$STATE_ARCHIVE_STATUS" = "archived" ] && [ -z "$STATE_ARCHIVED_AT" ]; then
+          STATE_ARCHIVED_AT="$(now_iso)"
+        fi
+        shift 2 ;;
+      --handover)
+        [ -n "${2:-}" ] || { printf '错误：--handover 缺少值\n' >&2; return 2; }
+        STATE_HANDOVER_PATH="$2"
+        STATE_HANDOVER_UPDATED_AT="$(now_iso)"
+        shift 2 ;;
+      *)
+        printf '错误：未知 state %s 参数：%s\n' "$command" "$1" >&2
+        return 2 ;;
+    esac
+  done
+}
+
+run_state_write() {
+  local command="$1"
+  local change="${2:-}"
+  shift 2 || true
+
+  validate_change_id "$change" || return 2
+
+  local root
+  root="$(find_state_root)"
+  if [ -z "$root" ]; then
+    printf '错误：当前目录不是 git 仓库。\n' >&2
+    return 2
+  fi
+
+  local file
+  file="$(state_path_for_change "$root" "$change")"
+  if [ "$command" = "update" ] && [ ! -f "$file" ]; then
+    printf '错误：state 文件不存在：%s\n' "$file" >&2
+    return 2
+  fi
+
+  state_load_or_defaults "$file" "$change"
+  state_apply_options "$command" "$@" || return 2
+  state_write_file "$file"
+
+  if [ "$command" = "init" ]; then
+    printf 'Initialized: %s\n' "$file"
+  else
+    printf 'Updated: %s\n' "$file"
+  fi
+}
+
+RECALL_BITROT_THRESHOLD=30
+RECALL_SUMMARY_LINES=8
+
+recall_valid_count() {
+  case "$1" in
+    ''|*[!0-9]*|0|0*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+recall_path_display() {
+  local root="$1" path="$2"
+  if [ -z "$path" ]; then
+    printf '(none)'
+    return 0
+  fi
+  local resolved
+  resolved="$(resolve_artifact_path "$root" "$path")"
+  if [ -f "$resolved" ]; then
+    printf '%s' "$path"
+  else
+    printf '%s (missing)' "$path"
+  fi
+}
+
+recall_handover_status() {
+  local root="$1" path="$2"
+  if [ -z "$path" ]; then
+    printf 'none'
+    return 0
+  fi
+  local resolved
+  resolved="$(resolve_artifact_path "$root" "$path")"
+  if [ -f "$resolved" ]; then
+    printf 'present'
+  else
+    printf 'missing'
+  fi
+}
+
+recall_is_secret_like() {
+  local line="$1"
+  local q="\"'\`"
+  local key_re='(api[_-]?key|secret|token|passwd|password|private[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token)'
+  local line_re="${key_re}[${q}]?[[:space:]]*[:=]+[[:space:]]*[${q}][^${q}]{8,}"
+  local placeholder_re='(process\.env|import\.meta\.env|os\.environ|getenv\(|\$\{|<[a-zA-Z/]|example|placeholder|changeme|your[_-]|dummy|redacted|sample|xxxxxxxx|\*\*\*\*)'
+  printf '%s' "$line" | grep -iqE "$line_re" || return 1
+  printf '%s' "$line" | grep -iqE "$placeholder_re" && return 1
+  return 0
+}
+
+recall_handover_summary() {
+  local root="$1" path="$2" limit="${3:-$RECALL_SUMMARY_LINES}"
+  [ -n "$path" ] || return 0
+  local resolved
+  resolved="$(resolve_artifact_path "$root" "$path")"
+  [ -f "$resolved" ] || return 0
+
+  local candidates
+  candidates="$(awk -v limit="$limit" '
+    function trim(s){ sub(/^[[:space:]]+/,"",s); sub(/[[:space:]]+$/,"",s); return s }
+    /^#+[[:space:]]/ {
+      lc=tolower($0)
+      if (lc ~ /(遗留与下一步|guardrail 承接|release readiness)/) insec=1; else insec=0
+      next
+    }
+    {
+      raw=trim($0)
+      if (raw=="") next
+      if (insec) { sec[++ns]=raw; next }
+      lc=tolower($0)
+      if (lc ~ /(release-check|release readiness|hotfix|rewind|secret|待确认|next|todo)/) kw[++nk]=raw
+    }
+    END {
+      n=0
+      for (i=1;i<=ns;i++) if (!(sec[i] in seen)) { seen[sec[i]]=1; print sec[i]; if (++n>=limit) exit }
+      for (i=1;i<=nk;i++) if (!(kw[i] in seen)) { seen[kw[i]]=1; print kw[i]; if (++n>=limit) exit }
+    }
+  ' "$resolved")"
+
+  [ -n "$candidates" ] || return 0
+  printf '%s\n' "$candidates" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if recall_is_secret_like "$line"; then
+      printf '%s\n' '[redacted secret-like line]'
+    elif [ "${#line}" -gt 180 ]; then
+      printf '%s\n' "${line:0:180}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
+recall_bitrot() {
+  local threshold="$1" verified_at="$2" handover_updated_at="$3" state_file="$4"
+  local reason base_epoch="" days=""
+  local vy hy
+  vy="$(ts_to_ymd "$verified_at")"
+  hy="$(ts_to_ymd "$handover_updated_at")"
+  if [ -n "$vy" ]; then
+    reason="verified_at"
+    base_epoch="$(ymd_to_epoch "$vy")"
+  elif [ -n "$hy" ]; then
+    reason="handover_updated_at"
+    base_epoch="$(ymd_to_epoch "$hy")"
+  else
+    reason="state_mtime"
+    base_epoch="$(file_mtime_epoch "$state_file")"
+  fi
+  if [ -n "$base_epoch" ]; then
+    days="$(days_since_epoch "$base_epoch")"
+  fi
+  local status="fresh"
+  if [ -n "$days" ] && [ "$days" -ge "$threshold" ]; then
+    status="stale"
+  fi
+  printf '%s\t%s\t%s\n' "$status" "${days:-0}" "$reason"
+}
+
+recall_human_next_action() {
+  case "$1" in
+    continue) echo "continue" ;;
+    run_tests) echo "run tests" ;;
+    refresh_handover) echo "refresh handover" ;;
+    need_manual_confirmation) echo "need manual confirmation" ;;
+    no_active_change) echo "no active change" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+recall_change_json() {
+  local status="$1" days="$2" reason="$3" handover_status="$4" summary="$5"
+  printf '{'
+  printf '"change_id":'; json_string "$STATE_CHANGE_ID"; printf ','
+  printf '"phase":'; json_string "$STATE_PHASE"; printf ','
+  printf '"mode":'; json_string "$STATE_MODE"; printf ','
+  printf '"archive_status":'; json_string "$STATE_ARCHIVE_STATUS"; printf ','
+  printf '"contract_path":'; json_string "$STATE_CONTRACT_PATH"; printf ','
+  printf '"decision_path":'; json_string "$STATE_DECISION_PATH"; printf ','
+  printf '"proposal_path":'; json_string "$STATE_PROPOSAL_PATH"; printf ','
+  printf '"design_path":'; json_string "$STATE_DESIGN_PATH"; printf ','
+  printf '"tasks_path":'; json_string "$STATE_TASKS_PATH"; printf ','
+  printf '"handover_path":'; json_string "$STATE_HANDOVER_PATH"; printf ','
+  printf '"handover_status":'; json_string "$handover_status"; printf ','
+  printf '"handover_updated_at":'; json_string "$STATE_HANDOVER_UPDATED_AT"; printf ','
+  printf '"opsx_verify":'; json_string "$STATE_OPSX_VERIFY"; printf ','
+  printf '"full_tests":'; json_string "$STATE_FULL_TESTS"; printf ','
+  printf '"last_command":'; json_string "$STATE_LAST_COMMAND"; printf ','
+  printf '"last_result":'; json_string "$STATE_LAST_RESULT"; printf ','
+  printf '"verified_at":'; json_string "$STATE_VERIFIED_AT"; printf ','
+  printf '"bit_rot":{"status":'; json_string "$status"; printf ',"stale_days":%s,"reason":' "${days:-0}"; json_string "$reason"; printf '},'
+  printf '"handover_summary":'; json_string_array "$summary"
+  printf '}'
+}
+
+run_recall() {
+  local format="human"
+  local threshold="$RECALL_BITROT_THRESHOLD"
+  local summary_lines="$RECALL_SUMMARY_LINES"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        format="json"; shift ;;
+      --days)
+        recall_valid_count "${2:-}" || { printf '错误：--days 需要正整数\n' >&2; return 2; }
+        threshold="$2"; shift 2 ;;
+      --summary-lines)
+        recall_valid_count "${2:-}" || { printf '错误：--summary-lines 需要正整数\n' >&2; return 2; }
+        summary_lines="$2"; shift 2 ;;
+      --all|--project)
+        printf '错误：%s 尚未进入公开版 CLI；v0.2 alpha 先支持单仓 recall。\n' "$1" >&2
+        return 2 ;;
+      *)
+        printf '错误：未知 recall 参数：%s\n' "$1" >&2
+        return 2 ;;
+    esac
+  done
+
+  local root
+  root="$(find_state_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      printf '{"repository":"","active_count":0,"changes":[],"bit_rot_summary":{"threshold_days":%s,"stale_count":0,"stale_changes":[]},"next_action":"no_active_change"}\n' "$threshold"
+      return 2
+    fi
+    printf 'zimaflow recall\n\n当前目录不是 git 仓库。\nNext action: no active change\n'
+    return 2
+  fi
+
+  local files
+  files="$(state_files "$root")"
+  local active_count=0 stale_count=0
+  local changes_json="" human_blocks="" stale_ids=""
+  local has_run_tests="no" has_refresh="no" has_manual="no" first="yes"
+
+  local file
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    local fallback_change
+    fallback_change="$(state_change_from_path "$root" "$file")"
+    state_load_or_defaults "$file" "$fallback_change"
+    [ "$STATE_PHASE" = "closed" ] && continue
+    active_count=$((active_count + 1))
+
+    local br status days reason
+    br="$(recall_bitrot "$threshold" "$STATE_VERIFIED_AT" "$STATE_HANDOVER_UPDATED_AT" "$file")"
+    status="$(printf '%s' "$br" | cut -f1)"
+    days="$(printf '%s' "$br" | cut -f2)"
+    reason="$(printf '%s' "$br" | cut -f3)"
+
+    if [ "$status" = "stale" ]; then
+      stale_count=$((stale_count + 1))
+      stale_ids="$(printf '%s\n%s' "$stale_ids" "$STATE_CHANGE_ID")"
+      case "$reason" in
+        verified_at) has_run_tests="yes" ;;
+        handover_updated_at) has_refresh="yes" ;;
+        state_mtime) has_manual="yes" ;;
+      esac
+    fi
+
+    local handover_status summary
+    handover_status="$(recall_handover_status "$root" "$STATE_HANDOVER_PATH")"
+    summary="$(recall_handover_summary "$root" "$STATE_HANDOVER_PATH" "$summary_lines")"
+
+    if [ "$first" = "no" ]; then
+      changes_json="${changes_json},"
+    fi
+    changes_json="${changes_json}$(recall_change_json "$status" "$days" "$reason" "$handover_status" "$summary")"
+    first="no"
+
+    local bitrot_line
+    if [ "$status" = "stale" ]; then
+      bitrot_line="bit-rot:   stale (${days}d, based on ${reason}) — rerun tests / refresh handover"
+    else
+      bitrot_line="bit-rot:   fresh (${days}d, based on ${reason})"
+    fi
+
+    human_blocks="${human_blocks}- ${STATE_CHANGE_ID}  phase=${STATE_PHASE}  mode=${STATE_MODE}  archive=${STATE_ARCHIVE_STATUS}"$'\n'
+    human_blocks="${human_blocks}    contract:  $(recall_path_display "$root" "$STATE_CONTRACT_PATH")"$'\n'
+    human_blocks="${human_blocks}    decision:  $(recall_path_display "$root" "$STATE_DECISION_PATH")"$'\n'
+    human_blocks="${human_blocks}    proposal:  $(recall_path_display "$root" "$STATE_PROPOSAL_PATH")"$'\n'
+    human_blocks="${human_blocks}    design:    $(recall_path_display "$root" "$STATE_DESIGN_PATH")"$'\n'
+    human_blocks="${human_blocks}    tasks:     $(recall_path_display "$root" "$STATE_TASKS_PATH")"$'\n'
+    human_blocks="${human_blocks}    handover:  $(recall_path_display "$root" "$STATE_HANDOVER_PATH")"$'\n'
+    human_blocks="${human_blocks}    verify:    opsx_verify=${STATE_OPSX_VERIFY}  full_tests=${STATE_FULL_TESTS}  last_command=${STATE_LAST_COMMAND}  last_result=${STATE_LAST_RESULT}  verified_at=${STATE_VERIFIED_AT}"$'\n'
+    human_blocks="${human_blocks}    handover updated: ${STATE_HANDOVER_UPDATED_AT}"$'\n'
+    human_blocks="${human_blocks}    ${bitrot_line}"$'\n'
+    if [ -n "$summary" ]; then
+      human_blocks="${human_blocks}    handover summary:"$'\n'
+      while IFS= read -r sline; do
+        [ -n "$sline" ] || continue
+        human_blocks="${human_blocks}      ${sline}"$'\n'
+      done <<EOF
+$summary
+EOF
+    else
+      human_blocks="${human_blocks}    handover summary: none obvious"$'\n'
+    fi
+  done <<EOF
+$files
+EOF
+
+  local next_action
+  if [ "$active_count" -eq 0 ]; then
+    next_action="no_active_change"
+  elif [ "$has_run_tests" = "yes" ]; then
+    next_action="run_tests"
+  elif [ "$has_refresh" = "yes" ]; then
+    next_action="refresh_handover"
+  elif [ "$has_manual" = "yes" ]; then
+    next_action="need_manual_confirmation"
+  else
+    next_action="continue"
+  fi
+
+  if [ "$format" = "json" ]; then
+    local stale_ids_clean
+    stale_ids_clean="$(printf '%s\n' "$stale_ids" | awk 'NF')"
+    printf '{'
+    printf '"repository":'; json_string "$root"; printf ','
+    printf '"active_count":%s,' "$active_count"
+    printf '"changes":[%s],' "$changes_json"
+    printf '"bit_rot_summary":{"threshold_days":%s,"stale_count":%s,"stale_changes":' "$threshold" "$stale_count"
+    json_string_array "$stale_ids_clean"
+    printf '},'
+    printf '"next_action":'; json_string "$next_action"
+    printf '}\n'
+    return 0
+  fi
+
+  printf 'zimaflow recall\n\n'
+  printf 'Repository: %s\n\n' "$root"
+  printf 'Active changes: %s\n\n' "$active_count"
+  if [ "$active_count" -gt 0 ]; then
+    printf '%s\n' "$human_blocks"
+  fi
+  if [ "$stale_count" -gt 0 ]; then
+    printf 'Bit-rot: stale — %s change(s) older than %s days\n' "$stale_count" "$threshold"
+  else
+    printf 'Bit-rot: none obvious — no active change older than %s days\n' "$threshold"
+  fi
+  printf '\nNext action: %s\n' "$(recall_human_next_action "$next_action")"
 }
 
 run_close() {
@@ -53,7 +892,7 @@ run_close() {
 
   if [ -z "$root" ]; then
     if [ "$format" = "json" ]; then
-      print_close_json "" "not_git_repo" 0 "need_manual_confirmation"
+      print_close_json "" "not_git_repo" 0 0 "" "need_manual_confirmation"
       return 2
     fi
     cat <<'EOF'
@@ -75,8 +914,21 @@ EOF
     next_action="need_manual_confirmation"
   fi
 
+  local state_root records active_state_count active_state_changes
+  if [ -d "openspec/changes" ]; then
+    state_root="$(pwd)"
+  else
+    state_root="$root"
+  fi
+  records="$(state_records "$state_root")"
+  active_state_count="$(printf '%s\n' "$records" | state_active_count)"
+  active_state_changes="$(printf '%s\n' "$records" | awk -F '\t' 'NF && $2 != "closed" { print $1 }' | sort)"
+  if [ "$active_state_count" != "0" ] && [ "$next_action" = "can_close" ]; then
+    next_action="need_manual_confirmation"
+  fi
+
   if [ "$format" = "json" ]; then
-    print_close_json "$root" "$git_status" "$dirty_count" "$next_action"
+    print_close_json "$root" "$git_status" "$dirty_count" "$active_state_count" "$active_state_changes" "$next_action"
     return 0
   fi
 
@@ -86,6 +938,7 @@ zimaflow close
 Repository: $root
 Git status: $git_status
 Dirty count: $dirty_count
+Active state count: $active_state_count
 Next action: $next_action
 
 提醒：这是轻量检查。正式结束 AI session 前，如有不确定，请继续运行 session-close-reconciler。
@@ -135,6 +988,34 @@ case "${1:-}" in
         exit 1
         ;;
     esac
+    ;;
+  state)
+    case "${2:-}" in
+      "")
+        run_state human
+        ;;
+      --json)
+        run_state json
+        ;;
+      init|update)
+        if [ "$#" -lt 3 ]; then
+          printf '错误：state %s 需要 change id。\n' "$2" >&2
+          exit 1
+        fi
+        cmd="$2"
+        change="$3"
+        shift 3
+        run_state_write "$cmd" "$change" "$@"
+        ;;
+      *)
+        printf '错误：未知 state 参数：%s\n' "$2" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  recall)
+    shift
+    run_recall "$@"
     ;;
   install-hooks)
     [ "$#" -eq 1 ] || {

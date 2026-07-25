@@ -1,6 +1,6 @@
 # 快速开始
 
-本指南用于体验 v0.1 工作流。v0.1 提供基础安装脚本，但完整项目初始化器后续提供。
+本指南用于体验公开版工作流。当前公开版提供基础安装脚本、主链路 skills、`zimaflow close` 以及单仓 `zimaflow state` / `zimaflow recall`；完整项目初始化器后续提供。
 
 ## 1. 打开仓库
 
@@ -43,13 +43,13 @@ skills/learn.md
 scripts/install.sh --target "$HOME/.zimaflow"
 ```
 
-可选：安装最小 CLI。它只提供 `zimaflow close`、`zimaflow close --json` 和非阻断 hook 提醒，方便在任意项目目录快速检查收口状态；完整工作流仍由 skills 执行。
+可选：安装 CLI。它提供 `zimaflow close`、单仓 `zimaflow state` / `zimaflow recall` 和非阻断 hook 提醒，方便在任意项目目录快速检查收口和续接状态；完整工作流仍由 skills 执行。
 
 ```bash
 scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"
 ```
 
-安装脚本复制根 `SKILL.md`、`skills/`、`rules/`、`references/`，并可选安装最小 CLI 或向显式指定的 `--adapter-dir` 生成自动发现 adapter。它不使用网络、不写入 shell profile、不修改任何 agent 配置、不初始化 OpenSpec、不创建项目注册表或项目文档目录。
+安装脚本复制根 `SKILL.md`、`skills/`、`rules/`、`references/`，并可选安装 CLI 或向显式指定的 `--adapter-dir` 生成自动发现 adapter。它不使用网络、不写入 shell profile、不修改任何 agent 配置、不初始化 OpenSpec、不创建项目注册表或项目文档目录。
 
 安装后请把 `ZIMAFLOW_HOME` 指向目标目录，skill 内部对 `references/` 的引用统一使用 `$ZIMAFLOW_HOME/references/`：
 
@@ -94,7 +94,7 @@ scripts/install.sh --target /path/to/project --claude-code
 # 生成 /path/to/project/.claude/skills/zimaflow-<name>/SKILL.md
 ```
 
-`--adapter-dir` 只写入用户显式传入的目录；脚本不会替你配置 agent 去扫描该目录。WorkBuddy 等未在 v0.1 中声明默认目录的 agent，应使用它实际配置的 skill root。
+`--adapter-dir` 只写入用户显式传入的目录；脚本不会替你配置 agent 去扫描该目录。未在公开版中声明默认目录的 agent，应使用它实际配置的 skill root。
 
 ## 4. 手动使用
 
@@ -121,7 +121,7 @@ demo 从一句需求开始：
 Add a tiny todo list CLI that can add, list, and complete tasks.
 ```
 
-它会展示用户在 v0.1 主链路中应看到的产物：
+它会展示用户在公开版主链路中应看到的产物：
 
 - 需求 brief
 - 任务计划
@@ -143,6 +143,6 @@ export ZIMAFLOW_PROJECTS_DIR="$HOME/projects-docs"
 
 ## 当前限制
 
-- v0.1 只提供基础安装脚本；完整项目初始化器后续提供。
-- v0.1 不会自动修改任何 agent 配置；全局可发现需要用户先让 agent 扫描对应 skill root。
-- `proto-review`、完整初始化器和完整 CLI 暂不属于首发边界（`legacy-project-onboarding` 已纳入 v0.1）。
+- 公开版只提供基础安装脚本；完整项目初始化器后续提供。
+- 公开版不会自动修改任何 agent 配置；全局可发现需要用户先让 agent 扫描对应 skill root。
+- `proto-review`、完整初始化器、跨项目 recall 和默认 hard hooks 暂不属于当前公开边界（`legacy-project-onboarding` 已纳入）。

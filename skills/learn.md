@@ -13,13 +13,13 @@ description: >
 
 识别开发过程中值得沉淀的经验教训，辅助整理成结构化的 lesson 条目，经用户确认后写入项目级和/或通用级经验库。跟踪同一类经验的出现频次，在达到阈值时提示进化（lesson → pattern → rule/skill）。
 
-同时维护知识使用证据：
+同时维护知识使用证据。公开版默认不要求启用账本；如果项目已经启用 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`，按以下规则记录：
 - 新 lesson/pattern 必须带稳定 `ID`（格式：`kf-YYYYMMDD-short-slug`）
-- 使用记录写入 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`
+- 使用记录可写入 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`
 - 锚点触发规则见 `$ZIMAFLOW_HOME/references/knowledge-anchor-map.md`
 - 账本字段和淘汰规则见 `$ZIMAFLOW_HOME/references/knowledge-usage-guide.md`
 
-账本只能作为证据，不能替代用户确认。`learn` 可以根据 ledger 建议更新"出现次数"、升级、降级或淘汰，但写入 lesson 正文、修改级别、回写 Skill 前必须问用户。
+账本只能作为可选证据，不能替代用户确认。`learn` 可以根据 ledger 建议更新"出现次数"、升级、降级或淘汰；没有 ledger 时，仍可根据本轮上下文和用户确认沉淀 lesson。写入 lesson 正文、修改级别、回写 Skill 前必须问用户。
 
 ## 两种触发方式
 
@@ -101,7 +101,7 @@ handover-manager 生成交接文档时，自动扫描本次 session 是否有待
 
 ## 三级进化机制
 
-进化判断优先参考 `knowledge-usage-ledger.jsonl` 中的 `applied` / `cited` 事件，但仍需用户确认。
+如果启用了 `knowledge-usage-ledger.jsonl`，进化判断优先参考其中的 `applied` / `cited` 事件；未启用时，基于本轮证据和已有 lessons 做人工确认。两种情况下都必须用户确认。
 
 - `loaded`：只说明读过，不能单独触发升级。
 - `cited`：说明被方案、评审或 handover 引用，可作为中等强度证据。
@@ -153,11 +153,11 @@ handover-manager 生成交接文档时，自动扫描本次 session 是否有待
    - 完全匹配（相同的错误信息、相同的 API/工具名）→ 更新出现次数
    - 相似主题（同一技术领域的类似问题）→ 提示用户确认是否为同一类
    - 无匹配 → 新建条目
-5. 如果匹配到已有 ID，汇总相关 ledger 事件，区分 loaded/cited/applied/challenged，不要把 loaded 直接算成出现次数
+5. 如果启用了 ledger 且匹配到已有 ID，汇总相关 ledger 事件，区分 loaded/cited/applied/challenged，不要把 loaded 直接算成出现次数
 
 ## 知识使用账本
 
-当 learn 确认某条知识被复用、引用、应用或质疑时，追加 JSONL 事件到 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`。
+当 learn 确认某条知识被复用、引用、应用或质疑，且项目启用了知识使用账本时，追加 JSONL 事件到 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`。未启用账本时，在 handover 或最终回复中列出 knowledge ID 和状态即可。
 
 最低字段：
 
@@ -232,7 +232,7 @@ handover-manager 生成交接文档时，自动扫描本次 session 是否有待
 - **不自动写入**：任何经验必须经用户确认才写入文件。AI 的判断可能不准，宁可漏记也不要记错的。
 - **格式统一**：所有 lesson 遵循统一格式，确保可检索、可对比、可进化。
 - **规则已修也要补记录**：直接改 Skill 能解决下次行为，但没有 lesson 就无法统计出现次数和判断是否应升级 pattern。
-- **账本是证据不是裁判**：ledger 记录的是使用事实，是否升级、降级、淘汰仍由用户确认。
+- **账本是可选证据不是裁判**：ledger 记录的是使用事实；没有 ledger 时流程仍可运行，是否升级、降级、淘汰仍由用户确认。
 - **稳定 ID 优先**：引用知识时优先使用 `ID`，不要依赖标题文本。
 - **进化不强制**：达到阈值时提示，但用户可以说"暂不封装"。有些经验需要更多观察。
 - **已有 lessons 可导入**：如果项目已有手写的 lessons 文件，可以读取并标记为种子数据，后续新经验在此基础上累积和匹配。

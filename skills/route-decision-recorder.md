@@ -40,14 +40,14 @@ description: >
 
 优先读取以下上下文：
 
-1. `PROJECT_REGISTRY.md` 中该项目的 `docs_dir`
+1. 已识别的项目文档目录 `docs_dir`；如果配置了可选 `PROJECT_REGISTRY.md`，可从其中读取
 2. 项目下的 PRD / TECH / 现有 Designs / Decisions
 3. `sdd-router` 给出的项目名、需求描述、模式判断、是否启用产品原型评审记录
 4. 如有需要，再快速扫代码仓，确认真实技术边界
 
 ## 输出位置
 
-输出到项目知识库目录下：
+输出到项目文档目录下：
 
 `<docs_dir>/../Decisions/`
 

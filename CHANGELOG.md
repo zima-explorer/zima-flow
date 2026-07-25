@@ -7,10 +7,16 @@
 
 ## [Unreleased]
 
+暂无。
+
+## [0.2.0-alpha] — 2026-07-25
+
 ### 新增
 
 - 根目录新增 `SKILL.md`，作为开源用户显式指定给 agent 的 zimaflow 入口 router。
 - `scripts/install.sh` 增加 `--adapter-dir <dir>`，可重复生成 `zimaflow-<name>/SKILL.md` 扁平 adapter；保留 `--claude-code` 作为项目级 Claude Code adapter 快捷方式（默认不改动任何 agent 配置）。
+- `bin/zimaflow` 新增单仓 `state` / `recall` first slice，用 `.zimaflow-state.yaml` 汇总 active change、handover 指针和 bit-rot 提醒；跨项目 `--all` / `--project` 暂不开放。
+- 新增 `tests/state.sh` 和 `tests/recall.sh`，并接入 `tests/smoke.sh`。
 
 ### 修复
 
@@ -22,6 +28,11 @@
 
 - 强化首页 README 的低记忆入口、工作流概览图、可靠性机制和学习要点说明，让 v0.1 主链路更容易快速理解。
 - README 与 `docs/getting-started.md` 补充通用源文件优先、Claude Code 自动发现 adapter、`--adapter-dir` 目录结构要求，以及 `ZIMAFLOW_HOME` 与 `$ZIMAFLOW_HOME/references/` 的对应关系。
+- 新增 `docs/session-continuity.md`、`docs/guardrails.md` 和 `docs/v0.2-alpha-plan.md`，把后续公开方向整理为跨 session 续接、CLI 读取端和 soft guardrails，而不是同步维护者完整工作区。
+- 新增 `docs/cli-reference.md` 说明 `close`、单仓 `state` / `recall` 和 reminder-only hooks。
+- 更新 `docs/open-source-boundary.md` 和 `docs/workflow-overview.md`，明确 v0.2 alpha 候选范围和暂不公开内容。
+- 将项目注册表和知识使用账本改写为可选进阶上下文，避免公开主链路依赖维护者工作区约定。
+- 对齐 `references/workload-dict.md` 中生产环境部署的措辞。
 
 ## [0.1.0] — 2026-07-15
 
@@ -51,5 +62,6 @@
 - 一键初始化器与完整 CLI（per-change 状态、知识淘汰复查、artifact 漂移检查）。
 - 知识使用闭环：留痕账本加淘汰复查。
 
-[Unreleased]: https://github.com/zima-explorer/zima-flow/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zima-explorer/zima-flow/compare/v0.2.0-alpha...HEAD
+[0.2.0-alpha]: https://github.com/zima-explorer/zima-flow/compare/v0.1.0...v0.2.0-alpha
 [0.1.0]: https://github.com/zima-explorer/zima-flow/releases/tag/v0.1.0

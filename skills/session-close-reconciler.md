@@ -49,7 +49,7 @@ reconciler 不替代 handover-manager，它们检查的维度不同：
 
 reconciler 需要从当前 session 上下文中获取：
 - 本轮改动了哪些文件（`git diff --name-only` 或 session 中的改动记录）
-- 当前项目信息（从 PROJECT_REGISTRY 获取 `code_repo` 和 `docs_dir`）
+- 当前项目信息（从用户上下文、当前 git 仓库或可选 `PROJECT_REGISTRY.md` 获取 `code_repo` 和 `docs_dir`）
 - 当前工作模式（完整 / 轻量）
 - 本轮是否读取或应用过 `knowledge-anchor-map.md` / `lessons-common.md` / 项目 `lessons.md`
 
@@ -105,7 +105,7 @@ cat "$ZIMAFLOW_HOME/references/doc-sync-matrix.md"
 | `README.md`（项目或 skill 的） | 同上 |
 | `Decisions/` 下的决策文档 | `ls <docs_dir>/Decisions/` 中是否有今天的新文件或修改 |
 | `lessons-common.md` / 项目 `lessons.md` | 是否在本 session 中已触发 learn 并写入 |
-| `knowledge-usage-ledger.jsonl` | 如果本轮按锚点加载、引用、应用或质疑知识，是否已追加 usage 事件 |
+| `knowledge-usage-ledger.jsonl` | 如果项目启用了 usage ledger 且本轮按锚点加载、引用、应用或质疑知识，是否已追加 usage 事件；未启用时只记录 knowledge ID |
 | `openspec/specs/` | 如果有 archive 操作，specs 是否已更新 |
 | `config.yaml` | 如果改了约束类规则，是否同步 |
 | `.zimaflow-state.yaml` | 如果本轮推进了 OpenSpec change 阶段，phase、verify、archive、handover 是否与实际状态一致 |
@@ -167,8 +167,8 @@ state 缺失或明显过期时，列为 📝 建议补充；如果缺失会导�
 
 1. 检查本轮是否读取过 `$ZIMAFLOW_HOME/references/knowledge-anchor-map.md`、`$ZIMAFLOW_HOME/references/lessons-common.md` 或项目 `lessons.md`。
 2. 列出本轮涉及的 knowledge ID，按 `loaded` / `cited` / `applied` / `challenged` 分类。
-3. 检查 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl` 是否已有对应事件。
-4. 如果缺事件，把它列为 📝 建议补充，不直接写入。
+3. 如果项目启用了 `$ZIMAFLOW_HOME/references/knowledge-usage-ledger.jsonl`，检查是否已有对应事件。
+4. 如果已启用但缺事件，把它列为 📝 建议补充，不直接写入；未启用时不视为缺失。
 5. 如果发现知识不适用或过期，把它列为 Learn 候选或 stale-review 候选。
 
 输出模板：
@@ -247,7 +247,7 @@ state 缺失或明显过期时，列为 📝 建议补充；如果缺失会导�
 - 如果有 ❌ 明确缺失项 → 默认建议"现在补"，补完后再生成 handover；只有用户明确选择跳过时，才记入 handover 遗留或继续后续流程
 - 如果只有 📝 建议补充 → 告知用户，由用户决定现在补、记入 handover 遗留，或本轮不处理
 - 如果有 🧠 Learn 候选 → 只列出候选，不自动写入 lessons；等待用户确认后再交给 learn Skill 写入
-- 如果有 🧾 Knowledge Usage 建议补记 → 询问用户是否补记 usage ledger；补记只追加 JSONL，不修改 lesson 正文
+- 如果有 🧾 Knowledge Usage 建议补记 → 仅在项目启用 usage ledger 时询问用户是否补记；补记只追加 JSONL，不修改 lesson 正文
 - 如果全部 ✅ → 告知"本轮收口完整"，继续生成 handover
 
 用户决策后：
@@ -270,7 +270,7 @@ state 缺失或明显过期时，列为 📝 建议补充；如果缺失会导�
 - 检查公开路线图或 issue 是否需要更新
 - 检查 references/ 下是否有新增文件未被其他 Skill 引用
 - 必须执行 Learn 候选扫描 Gate。若本轮是因为流程缺口、用户纠正或真实踩坑而修改 Skill，至少输出 1 条候选 lesson；如果没有候选，说明为什么这只是普通维护。
-- 如果本轮新增或修改 `knowledge-anchor-map.md`、`knowledge-usage-guide.md`、`knowledge-usage-ledger.jsonl` 或 lesson `ID`，必须检查 README 和 doc-sync matrix 是否同步。
+- 如果本轮新增或修改 `knowledge-anchor-map.md`、`knowledge-usage-guide.md`、可选 `knowledge-usage-ledger.jsonl` 或 lesson `ID`，必须检查 README 和 doc-sync matrix 是否同步。
 
 ### 全部通过的情况
 

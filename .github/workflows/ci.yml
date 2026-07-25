@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Make scripts executable
-        run: chmod +x bin/zimaflow scripts/install.sh tests/smoke.sh examples/demo/run-demo.sh
+        run: chmod +x bin/zimaflow scripts/install.sh tests/*.sh examples/demo/run-demo.sh
 
       - name: CLI version
         run: bin/zimaflow --version

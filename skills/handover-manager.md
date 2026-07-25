@@ -17,7 +17,7 @@ description: >
 
 所有 handover 文档遵循统一格式，文件命名：`{日期}-handover-{需求简述}.md`
 
-存放位置：项目注册表中该项目对应的 `docs_dir`。
+存放位置：已识别的项目文档目录 `docs_dir`。如果配置了项目注册表，可从注册表读取；公开版不要求注册表存在，没有 `docs_dir` 时先让用户指定保存位置。
 
 ```markdown
 # {需求简述} · 变更说明
@@ -117,7 +117,7 @@ handover-manager 不能因为 `git status` clean、测试通过、提交完成�
 - ❌ 明确缺失：默认建议"现在补"，用户明确跳过时才写入 handover 遗留
 - 📝 建议补充：交给用户选择现在补、记入遗留，或本轮不处理
 - 🧠 Learn 候选：只列出候选，不自动写入 lessons；等待用户确认后再交给 learn Skill
-- 🧾 Knowledge Usage：如果本轮有知识使用，handover 必须记录 knowledge ID 和状态；如果 usage ledger 缺事件，写入遗留或待沉淀经验
+- 🧾 Knowledge Usage：如果本轮有知识使用，handover 记录 knowledge ID 和状态；仅在项目启用 usage ledger 时检查事件是否缺失，未启用时把它作为普通待沉淀经验即可
 - 🛡️ Guardrail 收口：如果本轮涉及 hotfix / rewind / secrets，把 reconciler 的核对结果承接进 handover 的"Guardrail 承接"小节（hotfix 24h 待补项、rewind 当前有效产物路径、secrets 处理状态）；secrets 只记 `path:line` 或类别，不写原文
 
 ### 时机 2：工具切换

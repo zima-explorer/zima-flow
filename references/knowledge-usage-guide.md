@@ -1,15 +1,15 @@
 # 知识使用指南
 
-本指南定义 zimaflow 使用的个人规模知识闭环：
+本指南定义 zimaflow 可选启用的个人规模知识闭环。公开版主链路不依赖账本；启用后可按以下方式记录使用证据：
 
 1. 从 `knowledge-anchor-map.md` 加载相关知识。
-2. 在 `knowledge-usage-ledger.jsonl` 记录加载或应用行为。
+2. 在 `knowledge-usage-ledger.jsonl` 记录加载或应用行为（仅启用账本时）。
 3. 在 session 收口时复核使用情况。
 4. 只有在用户确认后，才升级、更新或废弃知识。
 
 ## Knowledge ID 格式
 
-每条参与账本的可复用经验都必须包含：
+每条参与账本的可复用经验都应包含：
 
 ```markdown
 - **ID**：kf-YYYYMMDD-short-slug
@@ -18,12 +18,12 @@
 规则：
 
 - ID 应保持稳定，不因标题调整而改变。
-- 新增 ID 前，先搜索已有 lessons 和 ledger，避免重复。
+- 新增 ID 前，先搜索已有 lessons；如果启用了 ledger，也搜索 ledger，避免重复。
 - 项目级 `lessons.md` 可以使用同样格式。
 
 ## 账本事件类型
 
-`knowledge-usage-ledger.jsonl` 每行写一个 JSON object。
+启用账本时，`knowledge-usage-ledger.jsonl` 每行写一个 JSON object。
 
 | Event type | 含义 | 升级权重 |
 |------------|------|----------|
@@ -49,7 +49,7 @@
 
 ## 过期复核 / 废弃
 
-过期复核可以手动执行，也可以在未来 `zimaflow close` 增强中执行。
+过期复核可以手动执行，也可以在未来 `zimaflow close` 增强中执行；未启用账本的项目可跳过本节。
 
 当知识条目满足以下条件时，可成为清理候选：
 

@@ -8,6 +8,8 @@ Add a tiny todo list CLI that can add, list, and complete tasks.
 
 这个 demo 是一次纸面演练，用来展示用户在 v0.1 主链路中应看到的产物。
 
+> 想看**带真实代码改动、测试证据和跨 session 恢复**的完整闭环？见 [case-cross-session](case-cross-session/README.md)，一条命令即可跑完。
+
 ## 1. 需求 brief
 
 打开 `project-docs/demo-cli/docs/Requirements/2026-07-11-todo-cli-brief.md`。

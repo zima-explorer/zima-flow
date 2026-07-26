@@ -32,6 +32,17 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 
 这个仓库是公开发行版，只保留经过发行审查的主链路，比完整开发流程更精简。
 
+## 最短试用路径（约 10 分钟）
+
+第一次来、想快速判断它是否对你有用，按这个顺序走：
+
+1. **30 秒确认能跑**：`git clone` 后运行 `bin/zimaflow close`，立即看到收口检查输出（见下方[快速开始](#快速开始)）。
+2. **3 分钟看纸面主链路**：[examples/demo/](examples/demo/README.md) 用一句需求把 brief → spec → handover 的产物摆给你看。
+3. **5 分钟看真实闭环**：[examples/demo/case-cross-session/](examples/demo/case-cross-session/README.md) 有可跑的代码改动和测试证据，演示一次小需求如何跨 session 用 `state` / `recall` / `handover` 恢复上下文并收口。
+4. **想深入**：读 [docs/getting-started.md](docs/getting-started.md) 与 [docs/workflow-overview.md](docs/workflow-overview.md)。
+
+适合谁：正在用 Codex、Claude Code、Cursor 等 AI Coding 工具，觉得「写得快、但维护和交接变难」的个人开发者和小团队。
+
 ## 只要记住三件事
 
 zimaflow 的入口刻意保持低记忆负担：
@@ -142,7 +153,19 @@ demo 用一句需求 `Add a tiny todo list CLI ...` 演练了整条链路，产�
 - 收口对账：[todo-cli-closing.md](examples/demo/project-docs/demo-cli/docs/Closing/2026-07-11-todo-cli-closing.md)
 - session handover：[handover-todo-cli.md](examples/demo/project-docs/demo-cli/docs/Handover/2026-07-11-handover-todo-cli.md)
 
-走查引导见 [examples/demo/README.md](examples/demo/README.md)。想让 agent 显式使用 zimaflow，从根入口 [`SKILL.md`](SKILL.md) 开始；想深入每个 skill，可从 [`skills/sdd-router.md`](skills/sdd-router.md) 继续，完整清单见 [docs/getting-started.md](docs/getting-started.md)。
+走查引导见 [examples/demo/README.md](examples/demo/README.md)。
+
+### 2.5 想看真实代码 + 验证证据
+
+上面的 demo 是纸面演练，帮你理解产物形态。如果想看一条**带真实代码改动、真实测试证据、跨 session 恢复**的完整闭环，直接跑：
+
+```bash
+examples/demo/case-cross-session/run-case.sh
+```
+
+它会真实执行聚焦测试（输出 `verify passed`）、`zimaflow state`、`zimaflow recall` 和 `zimaflow close`，演示一次「给已有功能加参数」的小需求如何跨两个 session 走完。走查引导见 [examples/demo/case-cross-session/README.md](examples/demo/case-cross-session/README.md)。
+
+想让 agent 显式使用 zimaflow，从根入口 [`SKILL.md`](SKILL.md) 开始；想深入每个 skill，可从 [`skills/sdd-router.md`](skills/sdd-router.md) 继续，完整清单见 [docs/getting-started.md](docs/getting-started.md)。
 
 ### 3. 安装到本地使用
 

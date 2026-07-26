@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Make scripts executable
-        run: chmod +x bin/zimaflow scripts/install.sh tests/*.sh examples/demo/run-demo.sh
+        run: chmod +x bin/zimaflow scripts/install.sh tests/*.sh examples/demo/run-demo.sh examples/demo/case-cross-session/run-case.sh examples/demo/case-cross-session/app/*.sh
 
       - name: CLI version
         run: bin/zimaflow --version
@@ -28,6 +28,9 @@ jobs:
 
       - name: Demo walkthrough
         run: examples/demo/run-demo.sh
+
+      - name: Cross-session case
+        run: examples/demo/case-cross-session/run-case.sh
 
       - name: Secret / local-path scan
         run: |

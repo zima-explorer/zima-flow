@@ -109,26 +109,44 @@ scripts/install.sh --target /path/to/project --claude-code
 
 ## 5. 运行 demo
 
-打开：
+公开版有两个 demo，建议按顺序看：
 
-```text
-examples/demo/README.md
-```
+**5.1 纸面主链路（理解产物形态）**
 
-demo 从一句需求开始：
+打开 `examples/demo/README.md`。它从一句需求开始：
 
 ```text
 Add a tiny todo list CLI that can add, list, and complete tasks.
 ```
 
-它会展示用户在公开版主链路中应看到的产物：
+展示用户在主链路中应看到的产物：需求 brief、任务计划、OpenSpec change 骨架、实现交接说明、收口检查清单、经验候选。运行 `examples/demo/run-demo.sh` 会校验这些产物是否齐全。
 
-- 需求 brief
-- 任务计划
-- OpenSpec change 骨架
-- 实现交接说明
-- 收口检查清单
-- 经验候选
+**5.2 真实跨 session 案例（看闭环真的能走完）**
+
+打开 `examples/demo/case-cross-session/README.md`，或直接运行：
+
+```bash
+examples/demo/case-cross-session/run-case.sh
+```
+
+这个案例比纸面 demo 更进一步：它有**可跑的代码改动**（给已有 todo CLI 加可配置文件路径）、**真实测试证据**，并演示一次小需求如何跨两个 session，用 `state` / `recall` / `handover` 恢复上下文再收口。脚本全程在临时目录进行，不污染本仓库。
+
+## 5.5 动手体验 state / recall / close
+
+想亲手理解三个续接原语，在任意 git 仓库里试跑（只读、不改你的代码）：
+
+```bash
+# close：轻量收口检查，输出 git 状态与 active state 汇总
+bin/zimaflow close
+
+# state：汇总当前仓库 openspec/changes/*/.zimaflow-state.yaml
+bin/zimaflow state
+
+# recall：跨 session 恢复视图（active change、handover 摘要、bit-rot、下一步）
+bin/zimaflow recall
+```
+
+三者的分工是：`state` 记录「当前 change 到哪一步」，`handover` 记录「为什么这样做、下一步怎么接」，`recall` 在下次 session 开始时把两者读出来告诉你「先看什么、下一步做什么」。设计说明见 [跨 session 续接模型](session-continuity.md)，命令细节见 [CLI Reference](cli-reference.md)。
 
 ## 6. 用在真实项目上
 

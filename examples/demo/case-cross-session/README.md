@@ -25,7 +25,7 @@ examples/demo/case-cross-session/run-case.sh
 
 它会真实执行：
 
-1. `app/test-todo.sh` —— 聚焦测试，产出 `verify passed: 6/6 checks` 证据。
+1. `app/test-todo.sh` —— 聚焦测试，产出 `verify passed: 7/7 checks` 证据。
 2. `zimaflow state init/update` —— 在一个临时 git 仓库里写入并更新单仓状态。
 3. `zimaflow recall` —— 打印跨 session 恢复视图（active change、handover 摘要、bit-rot、下一步）。
 4. `zimaflow close` —— 轻量收口检查。
@@ -44,6 +44,7 @@ examples/demo/case-cross-session/run-case.sh
 | 真实实现 | [`app/todo.sh`](app/todo.sh) |
 | 验证脚本（证据） | [`app/test-todo.sh`](app/test-todo.sh) |
 | Session 1 handover | [`project-docs/docs/Handover/2026-07-24-handover-session1.md`](project-docs/docs/Handover/2026-07-24-handover-session1.md) |
+| review / spec 合规检查 | [`project-docs/docs/Review/2026-07-24-configurable-path-compliance-report.md`](project-docs/docs/Review/2026-07-24-configurable-path-compliance-report.md) |
 | 收口检查清单 | [`project-docs/docs/Closing/2026-07-24-configurable-path-closing.md`](project-docs/docs/Closing/2026-07-24-configurable-path-closing.md) |
 | 经验候选 | [`project-docs/docs/Learn/2026-07-24-configurable-path-lesson.md`](project-docs/docs/Learn/2026-07-24-configurable-path-lesson.md) |
 
@@ -51,7 +52,7 @@ examples/demo/case-cross-session/run-case.sh
 
 ```text
 brief → task planning → state(init) → 实现 → handover → [中断]
-      → recall → verify(证据) → state(verified) → close → learn
+      → recall → verify(证据) → review/compliance → state(verified) → close → learn
 ```
 
-看完这条链路，你会得到一个具体结论：zimaflow 不只是概念，它能把一次真实的 AI Coding 小需求，从需求进入一直接到验证和交接。
+看完这条链路，你会得到一个具体结论：zimaflow 不只是概念，它能把一次真实的 AI Coding 小需求，从需求进入一直接到验证、合规审查和交接。

@@ -129,7 +129,7 @@ Add a tiny todo list CLI that can add, list, and complete tasks.
 examples/demo/case-cross-session/run-case.sh
 ```
 
-这个案例比纸面 demo 更进一步：它有**可跑的代码改动**（给已有 todo CLI 加可配置文件路径）、**真实测试证据**，并演示一次小需求如何跨两个 session，用 `state` / `recall` / `handover` 恢复上下文再收口。脚本全程在临时目录进行，不污染本仓库。
+这个案例比纸面 demo 更进一步：它有**可跑的代码改动**（给已有 todo CLI 加可配置文件路径）、**真实测试证据**、一份独立的 **spec 合规审查报告**（review/compliance 阶段的真实产物，而不只是收口清单里的一行状态），并演示一次小需求如何跨两个 session，用 `state` / `recall` / `handover` 恢复上下文再收口。脚本全程在临时目录进行，不污染本仓库。
 
 ## 5.5 动手体验 state / recall / close
 

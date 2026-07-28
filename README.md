@@ -163,7 +163,7 @@ demo 用一句需求 `Add a tiny todo list CLI ...` 演练了整条链路，产�
 examples/demo/case-cross-session/run-case.sh
 ```
 
-它会真实执行聚焦测试（输出 `verify passed`）、`zimaflow state`、`zimaflow recall` 和 `zimaflow close`，演示一次「给已有功能加参数」的小需求如何跨两个 session 走完。走查引导见 [examples/demo/case-cross-session/README.md](examples/demo/case-cross-session/README.md)。
+它会真实执行聚焦测试（输出 `verify passed`）、`zimaflow state`、`zimaflow recall` 和 `zimaflow close`，并配套提供一份独立的 `spec-compliance-check` 审查报告（review/compliance 证据），演示一次「给已有功能加参数」的小需求如何跨两个 session 走完。走查引导见 [examples/demo/case-cross-session/README.md](examples/demo/case-cross-session/README.md)。
 
 想让 agent 显式使用 zimaflow，从根入口 [`SKILL.md`](SKILL.md) 开始；想深入每个 skill，可从 [`skills/sdd-router.md`](skills/sdd-router.md) 继续，完整清单见 [docs/getting-started.md](docs/getting-started.md)。
 

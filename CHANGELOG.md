@@ -7,7 +7,10 @@
 
 ## [Unreleased]
 
-暂无。
+### 文档
+
+- `examples/demo/case-cross-session` 增加独立的 `Spec Compliance Report`（`docs/Review/`），把 review/compliance 从收口清单里的一行状态变成可链接、贴合 `spec-compliance-check.md` 输出格式的真实审查产物。
+- 审查中发现「默认路径不回归」场景缺自动化测试，随即在 `app/test-todo.sh` 补齐（`verify passed` 由 6/6 提升为 7/7），并同步更新 README / getting-started / workflow-overview / 案例 README / 收口清单中的引用与计数。
 
 ## [0.2.0-alpha] — 2026-07-25
 

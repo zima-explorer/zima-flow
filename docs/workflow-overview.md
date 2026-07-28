@@ -47,6 +47,8 @@ flowchart LR
 
 当前公开版已经纳入 handover、state/index 约定、session 收口，以及单仓 `state` / `recall` first slice；drift check、release readiness 这类只读入口仍在后续候选范围。设计说明见 [跨 session 续接模型](session-continuity.md)。
 
+`spec-compliance-check`（上图节点 J）在真实案例中的产物不只是一句"合规检查已通过"，而是一份独立、可链接的 Spec Compliance Report，见 [examples/demo/case-cross-session 的 review/compliance 报告](../examples/demo/case-cross-session/project-docs/docs/Review/2026-07-24-configurable-path-compliance-report.md)。
+
 ## 公开发行边界
 
 公开项目保留稳定的小主链路：

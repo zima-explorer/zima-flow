@@ -56,7 +56,7 @@ hr "Session 2 · 第 4 步：记录 verify 通过并收口"
   --verify passed \
   --full-tests passed \
   --last-command "bash app/test-todo.sh" \
-  --last-result "verify passed: 6/6 checks" >/dev/null
+  --last-result "verify passed: 7/7 checks" >/dev/null
 "$zimaflow" state
 echo
 "$zimaflow" close || true
@@ -69,6 +69,6 @@ cat <<EOF
   3. zimaflow recall（跨 session 恢复上下文）
   4. zimaflow close（轻量收口检查）
 
-对应的案例文档（brief / tasks / openspec / handover / closing / learn）见：
+对应的案例文档（brief / tasks / openspec / handover / review-compliance / closing / learn）见：
   $case_root/project-docs/
 EOF

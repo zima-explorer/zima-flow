@@ -58,5 +58,13 @@ TODO_FILE="$envfile" bash "$todo" add "via env" >/dev/null
 exist=$((exist + 1))
 echo "  PASS: TODO_FILE 环境变量指定文件路径生效"
 
+# 6. 默认路径回归：既未传 --file 也未设 TODO_FILE 时，仍写入当前目录下的 .todo.txt（行为不回归）
+defaultdir="$work/default-cwd"
+mkdir -p "$defaultdir"
+( cd "$defaultdir" && bash "$todo" add "Default path check" >/dev/null )
+[ -f "$defaultdir/.todo.txt" ] || { echo "  FAIL: 默认路径未回归到 .todo.txt" >&2; exit 1; }
+exist=$((exist + 1))
+echo "  PASS: 未传 --file / 未设 TODO_FILE 时，默认写入当前目录 .todo.txt（行为不回归）"
+
 total=$((pass + exist))
 echo "verify passed: ${total}/${total} checks（${pass} 个 grep 断言 + ${exist} 个存在性断言）"

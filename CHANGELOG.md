@@ -13,6 +13,10 @@
 - 审查中发现「默认路径不回归」场景缺自动化测试，随即在 `app/test-todo.sh` 补齐（`verify passed` 由 6/6 提升为 7/7），并同步更新 README / getting-started / workflow-overview / 案例 README / 收口清单中的引用与计数。
 - 案例的合规审查目录统一为 `docs/Reviews/`（原 `docs/Review/`），与项目文档分层规范中的「规范合规审查 → `Reviews/`」一致；同步更新案例 README、收口清单与 `docs/workflow-overview.md` 中的链接。
 - 上述 `Spec Compliance Report` 补充「验证证据匹配度」小节：如实标注本次变更命中「新增 / 扩展 CLI 参数或入口行为」1 类，期望证据为契约测试与兼容性检查，并指向 `app/test-todo.sh` 的对应检查项；其余变更类型标注为不涉及。
+- 新增公开案例 `examples/demo/case-evidence-closure`：给 demo 用的 todo CLI 增加 `list --status pending|done|all` 状态筛选，带真实代码改动与可复跑的验证证据（`run-case.sh` 输出 `verify passed: 6/6 checks`），演示轻量模式下证据如何收口——独立落盘的 `Spec Compliance Report`（含验证证据匹配度）、把「本轮无适用项」折叠成一行的收口清单，以及标注为「未写入公共经验库」的经验候选。
+- 该案例**不写 OpenSpec 三件套**：需求纯读、不改持久化格式 `id|done|title`、不涉及 schema / 权限 / 数据写入路径，风险低。规范的作用由 brief 的 Given/When/Then 承担，计划的作用由轻量任务台账承担；README 中写明什么时候才需要升级到完整模式。
+- 三个 demo 入口的职责区分写进 `examples/demo/README.md`、`README.md`、`docs/getting-started.md` 与 `docs/workflow-overview.md`：`examples/demo/` 是纸面演练（产物长什么样），`case-evidence-closure/` 是轻量模式（证据收口），`case-cross-session/` 是完整模式（跨 session）。两个真实案例载体相同、重量不同，产物数量的差别来自档位判断。
+- `docs/workflow-overview.md` 增加「轻量模式的链路长什么样」一节，并把 `spec-compliance-check` 的报告示例扩为两份（轻量 / 完整各一）。
 
 ### 变更
 

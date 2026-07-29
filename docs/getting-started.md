@@ -109,7 +109,7 @@ scripts/install.sh --target /path/to/project --claude-code
 
 ## 5. 运行 demo
 
-公开版有两个 demo，建议按顺序看：
+公开版有三个 demo，建议按顺序看：**看产物 → 看证据 → 看跨 session**。
 
 **5.1 纸面主链路（理解产物形态）**
 
@@ -121,7 +121,19 @@ Add a tiny todo list CLI that can add, list, and complete tasks.
 
 展示用户在主链路中应看到的产物：需求 brief、任务计划、OpenSpec change 骨架、实现交接说明、收口检查清单、经验候选。运行 `examples/demo/run-demo.sh` 会校验这些产物是否齐全。
 
-**5.2 真实跨 session 案例（看闭环真的能走完）**
+**5.2 证据收口案例（轻量模式）**
+
+打开 `examples/demo/case-evidence-closure/README.md`，或直接运行：
+
+```bash
+examples/demo/case-evidence-closure/run-case.sh
+```
+
+它有**可跑的代码改动**（给已有 todo CLI 加 `list --status pending|done|all` 状态筛选）和**可复跑的验证证据**（`verify passed: 6/6 checks`），重点看三样东西：验证证据怎么被复查、`spec-compliance-check` 的审查报告怎么独立落盘、收口清单怎么把「本轮无适用项」的分节折叠成一行（折叠只是显示合并，不代表没检查）。
+
+这个案例**不写 OpenSpec 三件套**：需求小、纯读、不改持久化格式，不涉及 schema / 权限 / 数据写入路径，走**轻量模式**就够——规范的作用由 brief 的 Given/When/Then 承担，计划的作用由轻量任务台账承担。
+
+**5.3 真实跨 session 案例（完整模式）**
 
 打开 `examples/demo/case-cross-session/README.md`，或直接运行：
 
@@ -129,9 +141,11 @@ Add a tiny todo list CLI that can add, list, and complete tasks.
 examples/demo/case-cross-session/run-case.sh
 ```
 
-这个案例比纸面 demo 更进一步：它有**可跑的代码改动**（给已有 todo CLI 加可配置文件路径）、**真实测试证据**、一份独立的 **spec 合规审查报告**（review/compliance 阶段的真实产物，而不只是收口清单里的一行状态），并演示一次小需求如何跨两个 session，用 `state` / `recall` / `handover` 恢复上下文再收口。脚本全程在临时目录进行，不污染本仓库。
+它同样有可跑的代码改动（给已有 todo CLI 加可配置文件路径）、真实测试证据和独立的 spec 合规审查报告，但走的是**完整模式**（有 OpenSpec 三件套），并演示一次小需求如何跨两个 session，用 `state` / `recall` / `handover` 恢复上下文再收口。脚本全程在临时目录进行，不污染本仓库。
 
-## 5.5 动手体验 state / recall / close
+> 5.2 与 5.3 载体相同、重量不同：产物数量的差别来自档位判断，不是其中一个做得不完整。**zimaflow 的默认动作不是把所有事流程化。**
+
+## 5.4 动手体验 state / recall / close
 
 想亲手理解三个续接原语，在任意 git 仓库里试跑（只读、不改你的代码）：
 

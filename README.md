@@ -38,8 +38,9 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 
 1. **30 秒确认能跑**：`git clone` 后运行 `bin/zimaflow close`，立即看到收口检查输出（见下方[快速开始](#快速开始)）。
 2. **3 分钟看纸面主链路**：[examples/demo/](examples/demo/README.md) 用一句需求把 brief → spec → handover 的产物摆给你看。
-3. **5 分钟看真实闭环**：[examples/demo/case-cross-session/](examples/demo/case-cross-session/README.md) 有可跑的代码改动和测试证据，演示一次小需求如何跨 session 用 `state` / `recall` / `handover` 恢复上下文并收口。
-4. **想深入**：读 [docs/getting-started.md](docs/getting-started.md) 与 [docs/workflow-overview.md](docs/workflow-overview.md)。
+3. **4 分钟看证据怎么收口**：[examples/demo/case-evidence-closure/](examples/demo/case-evidence-closure/README.md) 有可跑的代码改动和测试证据，演示一次**轻量模式**的小需求如何产出可复跑的验证、独立落盘的合规报告和逐项对账的收口清单。
+4. **5 分钟看跨 session 闭环**：[examples/demo/case-cross-session/](examples/demo/case-cross-session/README.md) 走**完整模式**，演示一次小需求如何跨 session 用 `state` / `recall` / `handover` 恢复上下文并收口。
+5. **想深入**：读 [docs/getting-started.md](docs/getting-started.md) 与 [docs/workflow-overview.md](docs/workflow-overview.md)。
 
 适合谁：正在用 Codex、Claude Code、Cursor 等 AI Coding 工具，觉得「写得快、但维护和交接变难」的个人开发者和小团队。
 
@@ -157,13 +158,17 @@ demo 用一句需求 `Add a tiny todo list CLI ...` 演练了整条链路，产�
 
 ### 2.5 想看真实代码 + 验证证据
 
-上面的 demo 是纸面演练，帮你理解产物形态。如果想看一条**带真实代码改动、真实测试证据、跨 session 恢复**的完整闭环，直接跑：
+上面的 demo 是纸面演练，帮你理解产物形态。另外两个案例有**真实代码改动和真实测试证据**，载体是同一个 todo CLI，但走的是不同重量的路径：
 
 ```bash
-examples/demo/case-cross-session/run-case.sh
+examples/demo/case-evidence-closure/run-case.sh   # 轻量模式：证据收口
+examples/demo/case-cross-session/run-case.sh      # 完整模式：跨 session
 ```
 
-它会真实执行聚焦测试（输出 `verify passed`）、`zimaflow state`、`zimaflow recall` 和 `zimaflow close`，并配套提供一份独立的 `spec-compliance-check` 审查报告（review/compliance 证据），演示一次「给已有功能加参数」的小需求如何跨两个 session 走完。走查引导见 [examples/demo/case-cross-session/README.md](examples/demo/case-cross-session/README.md)。
+- [case-evidence-closure](examples/demo/case-evidence-closure/README.md) 演示一次小需求怎么把证据收口：可复跑的验证（`verify passed: 6/6 checks`）、独立落盘的 `spec-compliance-check` 审查报告、把「本轮无适用项」折叠成一行的收口清单。它**不写 OpenSpec 三件套**——需求小、纯读、不改持久化格式，风险低，规范的作用由 brief 的 Given/When/Then 承担，计划的作用由轻量任务台账承担。
+- [case-cross-session](examples/demo/case-cross-session/README.md) 走完整模式（有 OpenSpec 三件套），真实执行聚焦测试、`zimaflow state`、`zimaflow recall` 和 `zimaflow close`，演示一次「给已有功能加参数」的小需求如何跨两个 session 走完。
+
+两个案例产物数量不同，是档位不同，不是其中一个做得不完整。**zimaflow 的默认动作不是把所有事流程化**：只有触发 schema 变更、权限、数据写入路径或需要正式审查留痕时，才升级到完整模式写 OpenSpec 三件套。
 
 想让 agent 显式使用 zimaflow，从根入口 [`SKILL.md`](SKILL.md) 开始；想深入每个 skill，可从 [`skills/sdd-router.md`](skills/sdd-router.md) 继续，完整清单见 [docs/getting-started.md](docs/getting-started.md)。
 

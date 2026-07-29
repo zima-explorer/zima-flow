@@ -47,7 +47,20 @@ flowchart LR
 
 当前公开版已经纳入 handover、state/index 约定、session 收口，以及单仓 `state` / `recall` first slice；drift check、release readiness 这类只读入口仍在后续候选范围。设计说明见 [跨 session 续接模型](session-continuity.md)。
 
-`spec-compliance-check`（上图节点 J）在真实案例中的产物不只是一句"合规检查已通过"，而是一份独立、可链接的 Spec Compliance Report，见 [examples/demo/case-cross-session 的 review/compliance 报告](../examples/demo/case-cross-session/project-docs/docs/Reviews/2026-07-24-configurable-path-compliance-report.md)。
+`spec-compliance-check`（上图节点 J）在真实案例中的产物不只是一句"合规检查已通过"，而是一份独立、可链接的 Spec Compliance Report。两个真实案例各有一份：[case-evidence-closure 的报告](../examples/demo/case-evidence-closure/project-docs/docs/Reviews/2026-07-29-list-status-filter-compliance-report.md)（轻量模式，含验证证据匹配度）、[case-cross-session 的报告](../examples/demo/case-cross-session/project-docs/docs/Reviews/2026-07-24-configurable-path-compliance-report.md)（完整模式）。
+
+## 轻量模式的链路长什么样
+
+上图是完整模式的主链路。**多数小需求不必走完它**：需求小、风险低、不改 schema / 权限 / 数据写入路径时，走轻量模式即可，不生成 OpenSpec 三件套。
+
+```text
+需求 → brief（Given/When/Then）→ 轻量任务台账 → 实现 → verify（可复跑证据）
+     → spec 合规审查（独立落盘）→ 收口对账 → 经验候选
+```
+
+省掉的是 proposal / design / tasks / spec delta 这几份产物形态，**不是省掉判断**：规范的作用由 brief 的 Given/When/Then 承担，计划的作用由轻量任务台账承担，合规审查和收口对账一项不少。
+
+可运行的样例见 [examples/demo/case-evidence-closure](../examples/demo/case-evidence-closure/README.md)；它与走完整模式的 [case-cross-session](../examples/demo/case-cross-session/README.md) 载体相同、重量不同，放在一起正好看清档位差别在哪。
 
 ## 公开发行边界
 

@@ -9,8 +9,10 @@
 
 ### 文档
 
-- `examples/demo/case-cross-session` 增加独立的 `Spec Compliance Report`（`docs/Review/`），把 review/compliance 从收口清单里的一行状态变成可链接、贴合 `spec-compliance-check.md` 输出格式的真实审查产物。
+- `examples/demo/case-cross-session` 增加独立的 `Spec Compliance Report`（`docs/Reviews/`），把 review/compliance 从收口清单里的一行状态变成可链接、贴合 `spec-compliance-check.md` 输出格式的真实审查产物。
 - 审查中发现「默认路径不回归」场景缺自动化测试，随即在 `app/test-todo.sh` 补齐（`verify passed` 由 6/6 提升为 7/7），并同步更新 README / getting-started / workflow-overview / 案例 README / 收口清单中的引用与计数。
+- 案例的合规审查目录统一为 `docs/Reviews/`（原 `docs/Review/`），与项目文档分层规范中的「规范合规审查 → `Reviews/`」一致；同步更新案例 README、收口清单与 `docs/workflow-overview.md` 中的链接。
+- 上述 `Spec Compliance Report` 补充「验证证据匹配度」小节：如实标注本次变更命中「新增 / 扩展 CLI 参数或入口行为」1 类，期望证据为契约测试与兼容性检查，并指向 `app/test-todo.sh` 的对应检查项；其余变更类型标注为不涉及。
 
 ## [0.2.0-alpha] — 2026-07-25
 

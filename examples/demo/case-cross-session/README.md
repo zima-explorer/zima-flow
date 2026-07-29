@@ -44,7 +44,7 @@ examples/demo/case-cross-session/run-case.sh
 | 真实实现 | [`app/todo.sh`](app/todo.sh) |
 | 验证脚本（证据） | [`app/test-todo.sh`](app/test-todo.sh) |
 | Session 1 handover | [`project-docs/docs/Handover/2026-07-24-handover-session1.md`](project-docs/docs/Handover/2026-07-24-handover-session1.md) |
-| review / spec 合规检查 | [`project-docs/docs/Review/2026-07-24-configurable-path-compliance-report.md`](project-docs/docs/Review/2026-07-24-configurable-path-compliance-report.md) |
+| review / spec 合规检查 | [`project-docs/docs/Reviews/2026-07-24-configurable-path-compliance-report.md`](project-docs/docs/Reviews/2026-07-24-configurable-path-compliance-report.md) |
 | 收口检查清单 | [`project-docs/docs/Closing/2026-07-24-configurable-path-closing.md`](project-docs/docs/Closing/2026-07-24-configurable-path-closing.md) |
 | 经验候选 | [`project-docs/docs/Learn/2026-07-24-configurable-path-lesson.md`](project-docs/docs/Learn/2026-07-24-configurable-path-lesson.md) |
 

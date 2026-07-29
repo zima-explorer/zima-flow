@@ -30,6 +30,7 @@
 | 知识使用事件产生 | `references/knowledge-usage-ledger.jsonl` | 建议 | 仅在项目启用 usage ledger 时追加；loaded/cited/applied/challenged 只追加 JSONL，不直接改 lesson 正文 |
 | lesson 稳定 ID 新增/变更 | `references/lessons-common.md` 或项目 `lessons.md` + `references/knowledge-anchor-map.md`（如被锚点引用） | 必须 | ID 是 ledger 和 handover 的稳定引用，改 ID 需同步引用方 |
 | 用户纠正关键流程 / 路径 / 脱敏 / 状态判断 | Learn 候选扫描结果 | 建议 | 例如真源/runtime 路径误用、公开内容脱敏、验收环境 与上线状态修正 |
+| spec-compliance-check 全量审查完成（全部 task 完成后） | 项目 `Reviews/` 下的独立 Spec Compliance Report；收口清单对应行链接该文件路径 | 必须 | 审查报告必须落盘为独立可链接文件，不能只写一行"合规检查：done"；每个 task 后的轻量检查不强制落盘 |
 | 技术决策（选型、架构变更） | `Decisions/` 或 `design.md` | 必须 | 决策必须有文档可追溯 |
 | 依赖变更（新增/升级/移除） | 项目 `PROGRESS.md` 或 `CHANGELOG` | 建议 | 记录依赖变化及原因 |
 | 工时估算偏差发现 | `workload-dict.md` 或项目 `project-workload-overrides.md` | 建议 | 校准工时基准，下次更准 |

@@ -101,12 +101,12 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 
 ## 后续规划
 
-以下能力已完成开发与打磨，计划在后续版本随公开示例和稳定模板逐步开放：
+以下方向已完成开发与打磨，计划在后续版本随公开示例和稳定模板逐步开放。表中同时标注每个方向**当前已公开到什么程度**，避免把尚未公开的命令读成已经可用；公开 CLI 的实际命令清单以 `bin/zimaflow --help` 为准：
 
 | 方向 | 亮点 |
 |------|------|
-| 跨 session 续接 | 单仓 `state` / `recall` first slice 已纳入；后续继续补发布前检查和漂移检查。 |
-| CLI 读取端 | 在 `close` 之外逐步公开状态读取、恢复提醒、发布前检查和漂移检查。 |
+| 跨 session 续接 | 单仓 `state` / `recall` first slice 已纳入；跨项目 `recall --all` / `--project` 需要项目注册表约定，暂不开放。 |
+| CLI 读取端 | 已纳入：`close`、单仓 `state` / `recall`、`install-hooks`。发布前检查、context 检查、漂移检查**尚未公开**，是下一批候选。 |
 | Guardrails Catalog | 给高风险规则稳定命名，默认 soft gate，方便 review 和 handover 引用。 |
 | 产品原型评审（`proto-review`） | 想法或 PRD 一键转成可评审原型，先看得见再写 spec。 |
 | 一键初始化器 | 一条命令接入新项目，自动配好 OpenSpec、规则和 skills。 |

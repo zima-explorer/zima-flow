@@ -30,7 +30,7 @@ v0.2 alpha 的候选主题是跨 session 续接与 CLI 读取端。它会优先�
 | session continuity | 解释 state、handover、recall、context index 如何配合恢复上下文 | 不引入新的 memory 系统，不复制私有 handover |
 | CLI 读取端 | 单仓 `state` / `recall` 已纳入；`release-check`、`context-check`、`drift-check` 是下一批候选命令 | 只读优先，不 deploy、不读取密钥、不自动改写项目 |
 | guardrails catalog | 给高风险规则稳定命名，方便 review 和 handover 引用 | 默认 soft gate，不默认阻断 |
-| 公开示例 | 用 demo 展示跨 session 恢复和发布前检查 | 示例必须无网络、无凭证、无真实项目名 |
+| 公开示例 | 用 demo 展示跨 session 恢复和证据收口 | 示例必须无网络、无凭证、无真实项目名 |
 
 更多说明见 [v0.2 alpha 公开规划](v0.2-alpha-plan.md)。
 

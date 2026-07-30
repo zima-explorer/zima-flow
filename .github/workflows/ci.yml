@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Make scripts executable
-        run: chmod +x bin/zimaflow scripts/install.sh tests/*.sh examples/demo/run-demo.sh examples/demo/case-cross-session/run-case.sh examples/demo/case-cross-session/app/*.sh
+        run: chmod +x bin/zimaflow scripts/install.sh tests/*.sh examples/demo/run-demo.sh examples/demo/case-evidence-closure/run-case.sh examples/demo/case-evidence-closure/app/*.sh examples/demo/case-cross-session/run-case.sh examples/demo/case-cross-session/app/*.sh
 
       - name: CLI version
         run: bin/zimaflow --version
@@ -28,6 +28,9 @@ jobs:
 
       - name: Demo walkthrough
         run: examples/demo/run-demo.sh
+
+      - name: Evidence closure case
+        run: examples/demo/case-evidence-closure/run-case.sh
 
       - name: Cross-session case
         run: examples/demo/case-cross-session/run-case.sh

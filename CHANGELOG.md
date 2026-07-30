@@ -18,6 +18,10 @@
 - 三个 demo 入口的职责区分写进 `examples/demo/README.md`、`README.md`、`docs/getting-started.md` 与 `docs/workflow-overview.md`：`examples/demo/` 是纸面演练（产物长什么样），`case-evidence-closure/` 是轻量模式（证据收口），`case-cross-session/` 是完整模式（跨 session）。两个真实案例载体相同、重量不同，产物数量的差别来自档位判断。
 - `docs/workflow-overview.md` 增加「轻量模式的链路长什么样」一节，并把 `spec-compliance-check` 的报告示例扩为两份（轻量 / 完整各一）。
 
+### 测试
+
+- 新增 `tests/skill-rules.sh`：grep 型公开规则守护测试，核对已发布的四条规则文本（Reviews 报告落盘、验证证据匹配度、`not_applicable` 折叠、验证失败/证据不完整上浮）是否仍在场，并守护三项结构性不变量（合规审查目录统一为 `Reviews/`、公开版 skill 行数上限、两个真实案例的 verify 计数与产物文档引用一致）。只断言章节标题、表格枚举值与边界短句，不断言完整散文句；由 `tests/smoke.sh` 串接。
+
 ### 变更
 
 - `spec-compliance-check` 增加「验证证据匹配度」核对步骤：按六类变更类型对照期望证据（契约测试 / migration / producer-consumer 兼容性 / 逆向流程与异常分支 / 越权与审计 / 测试安全网），并要求把「不涉及」与「未覆盖」区分开。这是提醒清单式的 soft check，不阻断流程；矩阵未覆盖的类型标注为建议人工判断。

@@ -57,6 +57,7 @@ fi
 
 "$repo_root/tests/state.sh"
 "$repo_root/tests/recall.sh"
+"$repo_root/tests/skill-rules.sh"
 
 json_output="$(cd "$non_git_dir" && "$repo_root/bin/zimaflow" close --json || true)"
 printf '%s\n' "$json_output" | grep -q '"git_status":"not_git_repo"'

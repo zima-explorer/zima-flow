@@ -19,7 +19,7 @@
 | reference tables | `references/*.md` | 小型可复用字典、矩阵和设计说明（含认知底座与 state 设计）。 |
 | agent rules | `rules/` | 面向公开使用的最小规则片段。 |
 | `scripts/install.sh` | `scripts/install.sh` | 基础安装公开仓内容，不做项目初始化。 |
-| `bin/zimaflow` | `bin/zimaflow` | CLI 读取端，提供 close、单仓 state/recall、context-check、JSON 输出和 hook 提醒。 |
+| `bin/zimaflow` | `bin/zimaflow` | CLI 读取端，提供 close、单仓 state/recall、context-check、release-check、JSON 输出和 hook 提醒。 |
 
 ## v0.2 alpha 候选方向
 
@@ -28,7 +28,7 @@ v0.2 alpha 的候选主题是跨 session 续接与 CLI 读取端。它会优先�
 | 方向 | 公开价值 | 边界 |
 |------|----------|------|
 | session continuity | 解释 state、handover、recall、context index 如何配合恢复上下文 | 不引入新的 memory 系统，不复制私有 handover |
-| CLI 读取端 | 单仓 `state` / `recall` 与 `context-check` 已纳入；`release-check`、`drift-check` 是后续候选命令 | 只读优先，不 deploy、不读取密钥、不自动改写项目 |
+| CLI 读取端 | 单仓 `state` / `recall`、`context-check` 与 `release-check` 已纳入；`drift-check` 是后续候选命令 | 只读优先，不 deploy、不读取密钥、不自动改写项目 |
 | guardrails catalog | 给高风险规则稳定命名，方便 review 和 handover 引用 | 默认 soft gate，不默认阻断 |
 | 公开示例 | 用 demo 展示跨 session 恢复和证据收口 | 示例必须无网络、无凭证、无真实项目名 |
 

@@ -6,7 +6,8 @@
 
 - [ ] 确认 release 目标版本，并核对 `bin/zimaflow --version` 输出一致。
 - [ ] 确认 release 包含一条完整主链路：需求进入、需求契约、任务拆解、OpenSpec/Superpowers bridge、合规检查、handover、session 收口和经验沉淀。
-- [ ] 确认后续规划模块仍标记为后续规划或后续提供，尤其是完整项目初始化器、`proto-review`、跨项目 recall、release/context/drift 检查和 hard hooks。
+- [ ] 确认后续规划模块仍标记为后续规划或后续提供，尤其是完整项目初始化器、`proto-review`、跨项目 recall、drift 检查和 hard hooks。
+- [ ] 运行 `bin/zimaflow release-check`，确认 `next_action` 与四问（scope / verification / rollback / communication）已由维护者人工判断。
 
 ## 公开内容审查
 

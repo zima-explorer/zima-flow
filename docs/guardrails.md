@@ -11,13 +11,13 @@ zimaflow 的 guardrails 默认是软约束：它们提醒、核对和要求说�
 | 沿用现有抽象 | 新增实现前先查已有工具、组件、接口和模式 | `spec-compliance-check` |
 | hotfix / rewind 识别 | 区分紧急修复、普通变更和纠偏回退 | `sdd-router` |
 | secrets 收口 | 只报告疑似敏感配置的 `path:line`，不输出密钥值 | `bin/zimaflow close` 与收口流程 |
+| 发布前就绪检查 | 发布前汇总 scope、verification、rollback、communication 四类人工确认问题 | `bin/zimaflow release-check` |
 
 ## 后续公开方向
 
 | 方向 | 说明 |
 |------|------|
 | Guardrail Catalog | 给高风险规则分配稳定 ID，方便在 review、handover 和 CLI 输出里引用。 |
-| Release Readiness | 发布前汇总 scope、verification、rollback、communication 四类人工确认问题。 |
 | Context Drift Check | 检查 context index 指向的 baseline 文档是否还存在。 |
 | Optional Hard Hooks | 只有在真实项目里反复出现同类高风险问题时，才考虑可选阻断式 hook。 |
 

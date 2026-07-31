@@ -41,6 +41,7 @@
 | session 收尾触发词或完成语义变更 | `session-close-reconciler/SKILL.md` + `handover-manager/SKILL.md` + zimaflow `README.md` | 必须 | git clean、tests passed、pushed 只代表工程状态完成；final response 宣布完结前必须先跑 reconciler |
 | zimaflow CLI / hook 能力变更 | zimaflow `README.md` + 对应 `bin/` 或 `scripts/` 文件 | 必须 | CLI 是开源用户入口，必须记录命令、默认行为、是否阻断 git 操作 |
 | zimaflow CLI / hook 能力变更 | 公开路线图或 issue | 建议 | strict hook、close report、pre-push 阻断等硬 harness 方案可先进入待办，不要求 v1 实现 |
+| 准备发布 / 上线 / 发版 / 交付 / 打 tag | handover 的「遗留与下一步」或项目 `PROGRESS.md`；建议先跑 `bin/zimaflow release-check` | 必须 | 记录 release-check 的 `next_action`；若非 `ready`，记录缺口类别（verify / archive / handover / secret review / manual confirmation）；四问（scope / verification / rollback / communication）只记「待人工确认 / 已确认」；不记录任何发布 token 或 secret 值 |
 
 ---
 

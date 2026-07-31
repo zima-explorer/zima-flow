@@ -44,7 +44,7 @@ flowchart LR
 | 几天后回到同一项目 | 先运行 recall，再打开最新 handover |
 | 多个未完成 change 同时存在 | 先看 active change 列表和 bit-rot 提醒 |
 | handover 之后有人改过 spec | 运行 drift check，再决定是否继续 |
-| 发布前需要确认状态 | 运行 release readiness 检查，再把缺口写入 handover |
+| 发布前需要确认状态 | 运行 `zimaflow release-check`，再把缺口写入 handover |
 
 ## 不做
 

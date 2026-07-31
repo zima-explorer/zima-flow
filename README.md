@@ -11,7 +11,7 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 
 它面向**个人开发者和小团队**：不追求企业级流程治理，而是用最少的约束把需求、规范、实现和收口串成一条可追踪、可交接的轻工作流。多数需求走 brief 就够，只有真正复杂的场景才升级到完整模式，避免小改动背上重流程的负担。
 
-它不是完整的 agent 框架，不是项目管理系统，也不是个人工作区的镜像。公开版保留一条经过发行审查的主链路，让读者可以完整体验：需求进入、需求契约、任务拆解、OpenSpec/Superpowers 衔接、合规检查、handover、session 收口和经验沉淀；`0.2.0-alpha` 进一步加入单仓 `state` / `recall` 读取端。
+它不是完整的 agent 框架，不是项目管理系统，也不是个人工作区的镜像。公开版保留一条经过发行审查的主链路，让读者可以完整体验：需求进入、需求契约、任务拆解、OpenSpec/Superpowers 衔接、合规检查、handover、session 收口和经验沉淀；`0.2.0-alpha` 进一步加入单仓 `state` / `recall`、`context-check` 和 `release-check` 读取端。
 
 这条主链路包括：
 
@@ -97,7 +97,7 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 | 参考表 | `references/*.md` | 纳入，已脱敏 |
 | agent 规则 | `rules/` | 纳入 |
 | 基础安装脚本 | `scripts/install.sh` | 纳入 |
-| CLI 读取端 | `bin/zimaflow` | 纳入（含 `close`、单仓 `state` / `recall`、`context-check`、非阻断 hook 提醒） |
+| CLI 读取端 | `bin/zimaflow` | 纳入（含 `close`、单仓 `state` / `recall`、`context-check`、`release-check`、非阻断 hook 提醒） |
 
 ## 后续规划
 
@@ -106,7 +106,7 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 | 方向 | 亮点 |
 |------|------|
 | 跨 session 续接 | 单仓 `state` / `recall` first slice 已纳入；跨项目 `recall --all` / `--project` 需要项目注册表约定，暂不开放。 |
-| CLI 读取端 | 已纳入：`close`、单仓 `state` / `recall`、`context-check`、`install-hooks`。发布前检查、漂移检查**尚未公开**，是后续候选。 |
+| CLI 读取端 | 已纳入：`close`、单仓 `state` / `recall`、`context-check`、`release-check`、`install-hooks`。漂移检查**尚未公开**，是后续候选。 |
 | Guardrails Catalog | 给高风险规则稳定命名，默认 soft gate，方便 review 和 handover 引用。 |
 | 产品原型评审（`proto-review`） | 想法或 PRD 一键转成可评审原型，先看得见再写 spec。 |
 | 一键初始化器 | 一条命令接入新项目，自动配好 OpenSpec、规则和 skills。 |
@@ -180,7 +180,7 @@ scripts/install.sh --target "$HOME/.zimaflow"
 
 安装脚本只复制公开仓内容，不初始化 OpenSpec、不创建项目注册表、不修改 shell profile 或 agent 配置。安装后可让 agent 从 `$HOME/.zimaflow/SKILL.md` 这个显式入口开始。demo 运行所需的环境变量在 [examples/demo/README.md](examples/demo/README.md) 中说明。
 
-`bin/zimaflow` 是可选 CLI：它提供 `close`、单仓 `state` / `recall` 和非阻断 hook 提醒，适合作为全局收口与续接探针，不是完整工作流引擎。想在任意项目里直接运行 `zimaflow close` 或 `zimaflow recall` 时，再把它安装到 PATH 目录：
+`bin/zimaflow` 是可选 CLI：它提供 `close`、单仓 `state` / `recall`、`context-check`、`release-check` 和非阻断 hook 提醒，适合作为全局收口、续接与发布前软检查探针，不是完整工作流引擎。想在任意项目里直接运行 `zimaflow close`、`zimaflow recall` 或 `zimaflow release-check` 时，再把它安装到 PATH 目录：
 
 ```bash
 scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"

@@ -14,6 +14,7 @@ zimaflow - lightweight workflow guardrails
   zimaflow state update <change> [options]
   zimaflow recall [--json] [--days N] [--summary-lines N]
   zimaflow context-check [--json]
+  zimaflow release-check [--json]
   zimaflow install-hooks
   zimaflow --help
   zimaflow --version
@@ -30,6 +31,9 @@ zimaflow - lightweight workflow guardrails
   context-check   检查 thin context-index 的 baseline / workflow 指针。
   context-check --json
                   输出 context-index 检查 JSON。
+  release-check   运行发布前置 soft checklist。
+  release-check --json
+                  输出发布前置检查 JSON。
   install-hooks   在当前 git 仓库安装非阻断提醒 hooks。
 
 state 选项：
@@ -277,6 +281,40 @@ $lines
 EOF
   fi
   printf ']'
+}
+
+git_changed_files() {
+  local root="$1"
+  (
+    cd "$root" || exit 1
+    {
+      git status --porcelain=v1 | sed 's/^...//'
+      git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null
+    } | awk 'NF' | sort -u
+  )
+}
+
+scan_secrets() {
+  local root="$1"
+  local changed_files="$2"
+  local q="\"'\`"
+  local key_re='(api[_-]?key|secret|token|passwd|password|private[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token)'
+  local line_re="${key_re}[${q}]?[[:space:]]*[:=]+[[:space:]]*[${q}][^${q}]{8,}"
+  local placeholder_re='(process\.env|import\.meta\.env|os\.environ|getenv\(|\$\{|<[a-zA-Z/]|example|placeholder|changeme|your[_-]|dummy|redacted|sample|xxxxxxxx|\*\*\*\*)'
+  local path_exclude_re='(^|/)(\.git|node_modules|target|dist|build|vendor|\.next|coverage)/|\.(png|jpe?g|gif|pdf|lock|map)$|(\.min\.js)$|(\.example|\.sample)$|(^|/)\.env\.example$'
+
+  printf '%s\n' "$changed_files" | while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s' "$f" | grep -qE "$path_exclude_re" && continue
+    local full="$root/$f"
+    [ -f "$full" ] || continue
+    grep -inE "$line_re" "$full" 2>/dev/null \
+      | grep -vEi "$placeholder_re" \
+      | while IFS=: read -r lineno _rest; do
+          [ -n "$lineno" ] || continue
+          printf '%s:%s\n' "$f" "$lineno"
+        done || true
+  done
 }
 
 print_close_json() {
@@ -1130,6 +1168,210 @@ Next action: $next_action
 EOF
 }
 
+release_questions_data() {
+  printf '%s\t%s\n' "scope" "本次发布范围是否与已确认 contract / decision / spec 一致？"
+  printf '%s\t%s\n' "verification" "关键测试、全量测试或人工验收是否已完成并记录？"
+  printf '%s\t%s\n' "rollback" "如果发布失败，回滚 / 关闭开关 / 恢复数据的路径是否明确？"
+  printf '%s\t%s\n' "communication" "是否需要通知用户 / 测试 / 运营 / 协作者？若需要，通知内容是否已准备好？"
+}
+
+release_human_next_action() {
+  case "$1" in
+    ready) printf 'ready\n' ;;
+    need_verify) printf 'need verify\n' ;;
+    need_archive) printf 'need archive\n' ;;
+    need_handover) printf 'need handover\n' ;;
+    need_secret_review) printf 'need secret review\n' ;;
+    need_manual_confirmation) printf 'need manual confirmation\n' ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+print_release_json() {
+  local repository="$1"
+  local git_status="$2"
+  local dirty_count="$3"
+  local active_count="$4"
+  local active_changes_json="$5"
+  local verification_readiness="$6"
+  local archive_readiness="$7"
+  local handover_readiness="$8"
+  local secrets_readiness="$9"
+  local secrets_hits="${10}"
+  local next_action="${11}"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"git_status":'; json_string "$git_status"; printf ','
+  printf '"dirty_count":%s,' "$dirty_count"
+  printf '"active_count":%s,' "$active_count"
+  printf '"active_changes":[%s],' "$active_changes_json"
+  printf '"verification_readiness":'; json_string "$verification_readiness"; printf ','
+  printf '"archive_readiness":'; json_string "$archive_readiness"; printf ','
+  printf '"handover_readiness":'; json_string "$handover_readiness"; printf ','
+  printf '"secrets_readiness":'; json_string "$secrets_readiness"; printf ','
+  printf '"secrets_hits":'; json_string_array "$secrets_hits"; printf ','
+  printf '"release_questions":['
+  local first="yes" id question
+  while IFS="$(printf '\t')" read -r id question; do
+    [ -n "$id" ] || continue
+    if [ "$first" = "no" ]; then printf ','; fi
+    printf '{'
+    printf '"id":'; json_string "$id"; printf ','
+    printf '"question":'; json_string "$question"; printf ','
+    printf '"requires_human_confirmation":true'
+    printf '}'
+    first="no"
+  done <<EOF
+$(release_questions_data)
+EOF
+  printf '],'
+  printf '"next_action":'; json_string "$next_action"
+  printf '}\n'
+}
+
+run_release_check() {
+  local format="${1:-human}"
+  local root
+  root="$(find_git_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      print_release_json "" "not_git_repo" 0 0 "" "not_checked" "not_checked" "not_checked" "not_checked" "" "need_manual_confirmation"
+      return 2
+    fi
+    printf 'zimaflow release-check\n\n当前目录不是 git 仓库。\nNext action: need manual confirmation\n'
+    return 2
+  fi
+
+  local dirty_count
+  dirty_count="$(cd "$root" && git status --porcelain=v1 | wc -l | tr -d ' ')"
+  local git_status="clean"
+  [ "$dirty_count" != "0" ] && git_status="dirty"
+
+  local changed_files secrets_hits secrets_readiness
+  changed_files="$(git_changed_files "$root")"
+  secrets_hits="$(scan_secrets "$root" "$changed_files" | head -20)"
+  secrets_readiness="clear"
+  [ -n "$secrets_hits" ] && secrets_readiness="suspected"
+
+  local state_root
+  if [ -d "openspec/changes" ]; then
+    state_root="$(pwd)"
+  else
+    state_root="$root"
+  fi
+
+  local files active_count verify_incomplete archive_pending handover_missing
+  files="$(state_files "$state_root")"
+  active_count=0
+  verify_incomplete="no"
+  archive_pending="no"
+  handover_missing="no"
+
+  local active_changes_json="" unarchived_ids="" first="yes"
+  local file
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    local fallback_change
+    fallback_change="$(state_change_from_path "$state_root" "$file")"
+    state_load_or_defaults "$file" "$fallback_change"
+    [ "$STATE_PHASE" = "closed" ] && continue
+    active_count=$((active_count + 1))
+
+    if [ "$STATE_OPSX_VERIFY" != "passed" ] || [ "$STATE_FULL_TESTS" != "passed" ]; then
+      verify_incomplete="yes"
+    fi
+
+    if [ "$STATE_ARCHIVE_STATUS" != "archived" ]; then
+      archive_pending="yes"
+      unarchived_ids="$(printf '%s\n%s' "$unarchived_ids" "$STATE_CHANGE_ID")"
+    fi
+
+    local handover_status
+    handover_status="$(recall_handover_status "$state_root" "$STATE_HANDOVER_PATH")"
+    if [ "$handover_status" != "present" ]; then
+      handover_missing="yes"
+    fi
+
+    if [ "$first" = "no" ]; then active_changes_json="${active_changes_json},"; fi
+    active_changes_json="${active_changes_json}$(
+      printf '{'
+      printf '"change_id":'; json_string "$STATE_CHANGE_ID"; printf ','
+      printf '"phase":'; json_string "$STATE_PHASE"; printf ','
+      printf '"opsx_verify":'; json_string "$STATE_OPSX_VERIFY"; printf ','
+      printf '"full_tests":'; json_string "$STATE_FULL_TESTS"; printf ','
+      printf '"archive_status":'; json_string "$STATE_ARCHIVE_STATUS"; printf ','
+      printf '"handover_status":'; json_string "$handover_status"
+      printf '}'
+    )"
+    first="no"
+  done <<EOF
+$files
+EOF
+
+  local verification_readiness archive_readiness handover_readiness
+  if [ "$active_count" -eq 0 ]; then
+    verification_readiness="no_active_change"
+    handover_readiness="no_active_change"
+  else
+    if [ "$verify_incomplete" = "yes" ]; then verification_readiness="incomplete"; else verification_readiness="ready"; fi
+    if [ "$handover_missing" = "yes" ]; then handover_readiness="missing"; else handover_readiness="ready"; fi
+  fi
+  if [ "$archive_pending" = "yes" ]; then archive_readiness="unarchived_present"; else archive_readiness="ready"; fi
+
+  local next_action="ready"
+  if [ "$secrets_readiness" = "suspected" ]; then
+    next_action="need_secret_review"
+  elif [ "$active_count" -gt 0 ] && [ "$verify_incomplete" = "yes" ]; then
+    next_action="need_verify"
+  elif [ "$archive_pending" = "yes" ]; then
+    next_action="need_archive"
+  elif [ "$active_count" -gt 0 ] && [ "$handover_missing" = "yes" ]; then
+    next_action="need_handover"
+  elif [ "$dirty_count" != "0" ]; then
+    next_action="need_manual_confirmation"
+  fi
+
+  if [ "$format" = "json" ]; then
+    print_release_json "$root" "$git_status" "$dirty_count" "$active_count" "$active_changes_json" "$verification_readiness" "$archive_readiness" "$handover_readiness" "$secrets_readiness" "$secrets_hits" "$next_action"
+    return 0
+  fi
+
+  local unarchived_list
+  unarchived_list="$(printf '%s\n' "$unarchived_ids" | awk 'NF' | paste -sd ', ' -)"
+
+  printf 'zimaflow release-check\n\n'
+  printf 'Repository: %s\n\n' "$root"
+  printf 'Git status: %s\n' "$git_status"
+  if [ "$git_status" = "dirty" ]; then
+    printf '  %s changed file(s); confirm intended for release\n' "$dirty_count"
+  fi
+  printf 'Active changes: %s\n' "$active_count"
+  printf 'Verification readiness: %s\n' "$verification_readiness"
+  printf 'Archive readiness: %s\n' "$archive_readiness"
+  if [ -n "$unarchived_list" ]; then
+    printf '  %s\n' "$unarchived_list"
+  fi
+  printf 'Handover readiness: %s\n' "$handover_readiness"
+  printf 'Secrets readiness: %s\n' "$secrets_readiness"
+  if [ "$secrets_readiness" = "suspected" ]; then
+    printf '  %s; review before release, do not commit real keys\n' "$(printf '%s' "$secrets_hits" | paste -sd ', ' -)"
+  fi
+
+  printf '\nRelease questions (human confirmation required):\n'
+  local n=0 id question
+  while IFS="$(printf '\t')" read -r id question; do
+    [ -n "$id" ] || continue
+    n=$((n + 1))
+    printf '  %s. [%s] %s\n' "$n" "$id" "$question"
+  done <<EOF
+$(release_questions_data)
+EOF
+
+  printf '\nNext action: %s\n' "$(release_human_next_action "$next_action")"
+  printf '\nReminder: release-check is a soft pre-release checklist. It never deploys, never tags, never reads release secrets, and never blocks.\n'
+}
+
 install_hooks() {
   local root
   root="$(find_git_root)"
@@ -1212,6 +1454,20 @@ case "${1:-}" in
         ;;
       *)
         printf '错误：未知 context-check 参数：%s\n' "$2" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  release-check)
+    case "${2:-}" in
+      "")
+        run_release_check human
+        ;;
+      --json)
+        run_release_check json
+        ;;
+      *)
+        printf '错误：未知 release-check 参数：%s\n' "$2" >&2
         exit 1
         ;;
     esac

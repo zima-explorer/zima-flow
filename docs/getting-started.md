@@ -43,7 +43,7 @@ skills/learn.md
 scripts/install.sh --target "$HOME/.zimaflow"
 ```
 
-可选：安装 CLI。它提供 `zimaflow close`、单仓 `zimaflow state` / `zimaflow recall` 和非阻断 hook 提醒，方便在任意项目目录快速检查收口和续接状态；完整工作流仍由 skills 执行。
+可选：安装 CLI。它提供 `zimaflow close`、单仓 `zimaflow state` / `zimaflow recall`、`zimaflow context-check`、`zimaflow release-check` 和非阻断 hook 提醒，方便在任意项目目录快速检查收口、续接状态、context 指针和发布前软检查；完整工作流仍由 skills 执行。
 
 ```bash
 scripts/install.sh --target "$HOME/.zimaflow" --bin-dir "$HOME/.local/bin"

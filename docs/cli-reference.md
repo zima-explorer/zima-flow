@@ -84,6 +84,39 @@ bin/zimaflow context-check --json
 
 `context-check` 是只读命令：不创建 context-index、不刷新 baseline 文档、不读取项目注册表、不阻断需求。
 
+## `release-check`
+
+```bash
+bin/zimaflow release-check
+bin/zimaflow release-check --json
+```
+
+运行发布前置 soft checklist，汇总 git 状态、active change 的验证 / archive / handover 状态、疑似 secret 位置和四个发布前人工确认问题。
+
+`release-check` 不 deploy、不打 tag、不创建 GitHub Release、不读取发布 token 或云厂商凭证；疑似 secret 只输出 `path:line`，不输出值。
+
+核心字段：
+
+- `repository`
+- `git_status`
+- `dirty_count`
+- `active_count`
+- `active_changes[]`
+- `verification_readiness`
+- `archive_readiness`
+- `handover_readiness`
+- `secrets_readiness`
+- `secrets_hits[]`
+- `release_questions[]`
+- `next_action`（`ready` / `need_verify` / `need_archive` / `need_handover` / `need_secret_review` / `need_manual_confirmation`）
+
+四个发布前人工确认问题固定覆盖：
+
+- scope
+- verification
+- rollback
+- communication
+
 ## `install-hooks`
 
 ```bash

@@ -45,7 +45,7 @@ flowchart LR
   F --> G["下次恢复"]
 ```
 
-当前公开版已经纳入 handover、state/index 约定、session 收口、单仓 `state` / `recall` first slice，以及只读 `context-check`：它检查 `.zimaflow/context-index.yaml` 里的 baseline / workflow 指针是否仍存在，但不创建或刷新文档。drift check、release readiness 这类只读入口仍在后续候选范围。设计说明见 [跨 session 续接模型](session-continuity.md)。
+当前公开版已经纳入 handover、state/index 约定、session 收口、单仓 `state` / `recall` first slice，以及只读 `context-check` 和 `release-check`：前者检查 `.zimaflow/context-index.yaml` 里的 baseline / workflow 指针是否仍存在，但不创建或刷新文档；后者在发布前汇总 git、验证、archive、handover、secret 位置和四个需人工确认的问题，但不 deploy、不打 tag、不读取发布凭证。drift check 仍在后续候选范围。设计说明见 [跨 session 续接模型](session-continuity.md)。
 
 `spec-compliance-check`（上图节点 J）在真实案例中的产物不只是一句"合规检查已通过"，而是一份独立、可链接的 Spec Compliance Report。两个真实案例各有一份：[case-evidence-closure 的报告](../examples/demo/case-evidence-closure/project-docs/docs/Reviews/2026-07-29-list-status-filter-compliance-report.md)（轻量模式，含验证证据匹配度）、[case-cross-session 的报告](../examples/demo/case-cross-session/project-docs/docs/Reviews/2026-07-24-configurable-path-compliance-report.md)（完整模式）。
 

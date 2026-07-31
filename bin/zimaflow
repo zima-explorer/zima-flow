@@ -288,7 +288,7 @@ git_changed_files() {
   (
     cd "$root" || exit 1
     {
-      git status --porcelain=v1 | sed 's/^...//'
+      git --no-optional-locks status --porcelain=v1 | sed 's/^...//'
       git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null
     } | awk 'NF' | sort -u
   )
@@ -1128,7 +1128,7 @@ EOF
   fi
 
   local dirty_count
-  dirty_count="$(cd "$root" && git status --porcelain=v1 | wc -l | tr -d ' ')"
+  dirty_count="$(cd "$root" && git --no-optional-locks status --porcelain=v1 | wc -l | tr -d ' ')"
 
   local git_status="clean"
   local next_action="can_close"
@@ -1244,7 +1244,7 @@ run_release_check() {
   fi
 
   local dirty_count
-  dirty_count="$(cd "$root" && git status --porcelain=v1 | wc -l | tr -d ' ')"
+  dirty_count="$(cd "$root" && git --no-optional-locks status --porcelain=v1 | wc -l | tr -d ' ')"
   local git_status="clean"
   [ "$dirty_count" != "0" ] && git_status="dirty"
 

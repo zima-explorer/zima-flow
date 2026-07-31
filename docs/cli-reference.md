@@ -110,6 +110,8 @@ bin/zimaflow release-check --json
 - `release_questions[]`
 - `next_action`（`ready` / `need_verify` / `need_archive` / `need_handover` / `need_secret_review` / `need_manual_confirmation`）
 
+当多个缺口同时存在时，`next_action` 按以下顺序取最高优先级：`need_secret_review` > `need_verify` > `need_archive` > `need_handover` > `need_manual_confirmation` > `ready`。
+
 四个发布前人工确认问题固定覆盖：
 
 - scope

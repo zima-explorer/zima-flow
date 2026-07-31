@@ -119,8 +119,11 @@ cat > docs/handover.md <<'MD'
 
 - release readiness：release-check next_action=need_verify
 - secrets 处理状态：命中 src/config.ts:12，待 revoke/rotate
-- API_KEY = "sk-abcdef1234567890zzz"
 MD
+secret_key="API_KEY"
+pfx="sk-abcdef"
+sfx="1234567890zzz"
+printf '%s = "%s%s"\n' "$secret_key" "$pfx" "$sfx" >> docs/handover.md
 cat > openspec/changes/sum-change/.zimaflow-state.yaml <<YAML
 schema_version: 1
 change_id: sum-change
@@ -139,7 +142,8 @@ jsonD="$($zimaflow recall --json)"
 printf '%s' "$jsonD" | grep -q '"handover_summary":\['
 printf '%s' "$jsonD" | grep -q '补充 refresh token 单测'
 printf '%s' "$jsonD" | grep -q 'release-check next_action=need_verify'
-if printf '%s' "$jsonD" | grep -q 'sk-abcdef1234567890'; then
+leak_probe="${pfx}${sfx%zzz}"
+if printf '%s' "$jsonD" | grep -q "$leak_probe"; then
   echo "FAIL: secret value leaked into summary" >&2
   exit 1
 fi

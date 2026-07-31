@@ -97,7 +97,7 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 | 参考表 | `references/*.md` | 纳入，已脱敏 |
 | agent 规则 | `rules/` | 纳入 |
 | 基础安装脚本 | `scripts/install.sh` | 纳入 |
-| CLI 读取端 | `bin/zimaflow` | 纳入（含 `close`、单仓 `state` / `recall`、非阻断 hook 提醒） |
+| CLI 读取端 | `bin/zimaflow` | 纳入（含 `close`、单仓 `state` / `recall`、`context-check`、非阻断 hook 提醒） |
 
 ## 后续规划
 
@@ -106,7 +106,7 @@ zimaflow 不追求把 agent 变成全自动运行时，而是把容易漂移的�
 | 方向 | 亮点 |
 |------|------|
 | 跨 session 续接 | 单仓 `state` / `recall` first slice 已纳入；跨项目 `recall --all` / `--project` 需要项目注册表约定，暂不开放。 |
-| CLI 读取端 | 已纳入：`close`、单仓 `state` / `recall`、`install-hooks`。发布前检查、context 检查、漂移检查**尚未公开**，是下一批候选。 |
+| CLI 读取端 | 已纳入：`close`、单仓 `state` / `recall`、`context-check`、`install-hooks`。发布前检查、漂移检查**尚未公开**，是后续候选。 |
 | Guardrails Catalog | 给高风险规则稳定命名，默认 soft gate，方便 review 和 handover 引用。 |
 | 产品原型评审（`proto-review`） | 想法或 PRD 一键转成可评审原型，先看得见再写 spec。 |
 | 一键初始化器 | 一条命令接入新项目，自动配好 OpenSpec、规则和 skills。 |

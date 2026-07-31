@@ -63,6 +63,27 @@ bin/zimaflow recall --summary-lines 3
 
 `recall` 是只读命令：不修改 state、不刷新 handover、不运行测试、不触发 CI。
 
+## `context-check`
+
+```bash
+bin/zimaflow context-check
+bin/zimaflow context-check --json
+```
+
+从当前目录向上寻找 `.zimaflow/context-index.yaml`，检查其中 baseline 与 workflow 指针是否仍指向存在的文件。它适合在存量项目 onboarding 后、或担心项目地图过期时运行。
+
+核心字段：
+
+- `context_index`
+- `docs_dir`
+- `context_index_status`
+- `checked_count`
+- `missing_count`
+- `references[]`
+- `next_action`（`ok` / `refresh_baseline` / `create_context_index`）
+
+`context-check` 是只读命令：不创建 context-index、不刷新 baseline 文档、不读取项目注册表、不阻断需求。
+
 ## `install-hooks`
 
 ```bash

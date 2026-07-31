@@ -20,10 +20,12 @@
 
 ### 测试
 
+- 新增 `tests/context-check.sh` 并串入 `tests/smoke.sh`，覆盖 context index 缺失、baseline 指针缺失、全部指针存在、从子目录向上查找四类边界。
 - 新增 `tests/skill-rules.sh`：grep 型公开规则守护测试，核对已发布的四条规则文本（Reviews 报告落盘、验证证据匹配度、`not_applicable` 折叠、验证失败/证据不完整上浮）是否仍在场，并守护三项结构性不变量（合规审查目录统一为 `Reviews/`、公开版 skill 行数上限、两个真实案例的 verify 计数与产物文档引用一致）。只断言章节标题、表格枚举值与边界短句，不断言完整散文句；由 `tests/smoke.sh` 串接。
 
 ### 变更
 
+- `bin/zimaflow` 新增只读 `context-check` / `context-check --json`：从当前目录向上寻找 `.zimaflow/context-index.yaml`，检查 baseline / workflow 指针是否仍存在，输出 `ok` / `refresh_baseline` / `create_context_index`；不创建 index、不刷新 baseline、不读取项目注册表、不阻断需求。
 - `spec-compliance-check` 增加「验证证据匹配度」核对步骤：按六类变更类型对照期望证据（契约测试 / migration / producer-consumer 兼容性 / 逆向流程与异常分支 / 越权与审计 / 测试安全网），并要求把「不涉及」与「未覆盖」区分开。这是提醒清单式的 soft check，不阻断流程；矩阵未覆盖的类型标注为建议人工判断。
 - `spec-compliance-check` 增加全量审查报告的落盘要求：全部 task 完成后的审查须产出 `Reviews/` 下的独立报告文件，收口清单与 handover 链接该路径，不能只写一行状态；每个 task 后的轻量检查不强制落盘。`doc-sync-matrix` 同步新增对应行。
 - `session-close-reconciler` 增加两条收口清单格式规则：结论为「本轮无适用项」的分节合并成一行显示（仅合并显示，不减少检查项，Learn 候选不参与合并）；验证失败必须写入「明确缺失」、验证未跑或证据不完整必须写入「建议补充」，即使归因为环境问题也要显示，只在条目中标注归因。两条规则均为 soft check，不自动阻断、不自动改测试。

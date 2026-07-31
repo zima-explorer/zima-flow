@@ -13,6 +13,7 @@ zimaflow - lightweight workflow guardrails
   zimaflow state init <change> [options]
   zimaflow state update <change> [options]
   zimaflow recall [--json] [--days N] [--summary-lines N]
+  zimaflow context-check [--json]
   zimaflow install-hooks
   zimaflow --help
   zimaflow --version
@@ -26,6 +27,9 @@ zimaflow - lightweight workflow guardrails
   state update    更新某个 change 的常用状态字段。
   recall          汇总单仓 active change、handover 和 bit-rot 提醒。
   recall --json   输出 recall 汇总 JSON。
+  context-check   检查 thin context-index 的 baseline / workflow 指针。
+  context-check --json
+                  输出 context-index 检查 JSON。
   install-hooks   在当前 git 仓库安装非阻断提醒 hooks。
 
 state 选项：
@@ -116,6 +120,38 @@ yaml_nested_value() {
       exit
     }
   ' "$file" 2>/dev/null | yaml_clean_value
+}
+
+find_context_index() {
+  local dir
+  dir="$(pwd)"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.zimaflow/context-index.yaml" ]; then
+      printf '%s/.zimaflow/context-index.yaml' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+}
+
+path_is_absolute() {
+  case "$1" in
+    /*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_context_path() {
+  local docs_dir="$1"
+  local path="$2"
+  if [ -z "$path" ]; then
+    return 0
+  fi
+  if path_is_absolute "$path"; then
+    printf '%s' "$path"
+  else
+    printf '%s/%s' "$docs_dir" "$path"
+  fi
 }
 
 state_files() {
@@ -470,6 +506,155 @@ run_state() {
 $records
 EOF
   printf '\nActive changes: %s\n' "$active_count"
+}
+
+context_check_records() {
+  local index_file="$1"
+  local docs_dir="$2"
+  local key value full status
+
+  for key in \
+    architecture_overview \
+    module_map \
+    interface_inventory \
+    data_model_er \
+    test_entry_points \
+    key_flows \
+    implicit_knowledge_qa; do
+    value="$(yaml_nested_value "$index_file" "baseline" "$key")"
+    [ -n "$value" ] || continue
+    full="$(resolve_context_path "$docs_dir" "$value")"
+    if [ -e "$full" ]; then status="present"; else status="missing"; fi
+    printf 'baseline\t%s\t%s\t%s\t%s\n' "$key" "$value" "$full" "$status"
+  done
+
+  for key in latest_handover latest_state; do
+    value="$(yaml_nested_value "$index_file" "workflow" "$key")"
+    [ -n "$value" ] || continue
+    full="$(resolve_context_path "$docs_dir" "$value")"
+    if [ -e "$full" ]; then status="present"; else status="missing"; fi
+    printf 'workflow\t%s\t%s\t%s\t%s\n' "$key" "$value" "$full" "$status"
+  done
+}
+
+context_records_count() {
+  awk 'NF { n++ } END { print n + 0 }'
+}
+
+context_missing_count() {
+  awk -F '\t' '$5 == "missing" { n++ } END { print n + 0 }'
+}
+
+context_next_action() {
+  local status="$1"
+  local missing="$2"
+  if [ "$status" = "missing" ]; then
+    printf 'create_context_index\n'
+  elif [ "$missing" -gt 0 ]; then
+    printf 'refresh_baseline\n'
+  else
+    printf 'ok\n'
+  fi
+}
+
+print_context_json() {
+  local index_file="$1"
+  local docs_dir="$2"
+  local index_status="$3"
+  local records="$4"
+  local checked_count="$5"
+  local missing_count="$6"
+  local next_action="$7"
+
+  printf '{'
+  printf '"context_index":'; json_string "$index_file"; printf ','
+  printf '"docs_dir":'; json_string "$docs_dir"; printf ','
+  printf '"context_index_status":'; json_string "$index_status"; printf ','
+  printf '"checked_count":%s,' "$checked_count"
+  printf '"missing_count":%s,' "$missing_count"
+  printf '"references":['
+  local first="yes" kind key raw full status
+  if [ -n "$records" ]; then
+    while IFS="$(printf '\t')" read -r kind key raw full status; do
+      [ -n "$key" ] || continue
+      if [ "$first" = "no" ]; then printf ','; fi
+      printf '{'
+      printf '"kind":'; json_string "$kind"; printf ','
+      printf '"key":'; json_string "$key"; printf ','
+      printf '"path":'; json_string "$raw"; printf ','
+      printf '"resolved_path":'; json_string "$full"; printf ','
+      printf '"status":'; json_string "$status"
+      printf '}'
+      first="no"
+    done <<EOF
+$records
+EOF
+  fi
+  printf '],'
+  printf '"next_action":'; json_string "$next_action"
+  printf '}\n'
+}
+
+context_human_next_action() {
+  case "$1" in
+    ok) printf 'ok\n' ;;
+    refresh_baseline) printf 'refresh baseline\n' ;;
+    create_context_index) printf 'create context index\n' ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+run_context_check() {
+  local format="${1:-human}"
+  local index_file
+  index_file="$(find_context_index)"
+
+  if [ -z "$index_file" ]; then
+    local next_action
+    next_action="$(context_next_action missing 0)"
+    if [ "$format" = "json" ]; then
+      print_context_json "" "" "missing" "" 0 0 "$next_action"
+      return 0
+    fi
+    printf 'Context check\n\n'
+    printf 'Context index: missing\n'
+    printf 'No .zimaflow/context-index.yaml found from current directory upward.\n\n'
+    printf 'Next action: %s\n' "$(context_human_next_action "$next_action")"
+    printf '\nReminder: context-check is read-only. It reports missing pointers but never creates context-index, refreshes baseline docs, or blocks work.\n'
+    return 0
+  fi
+
+  local docs_dir records checked_count missing_count next_action
+  docs_dir="$(dirname "$(dirname "$index_file")")"
+  records="$(context_check_records "$index_file" "$docs_dir")"
+  checked_count="$(printf '%s\n' "$records" | context_records_count)"
+  missing_count="$(printf '%s\n' "$records" | context_missing_count)"
+  next_action="$(context_next_action present "$missing_count")"
+
+  if [ "$format" = "json" ]; then
+    print_context_json "$index_file" "$docs_dir" "present" "$records" "$checked_count" "$missing_count" "$next_action"
+    return 0
+  fi
+
+  printf 'Context check\n\n'
+  printf 'Context index: %s\n' "$index_file"
+  printf 'Docs dir:      %s\n\n' "$docs_dir"
+  printf 'References checked: %s\n' "$checked_count"
+  printf 'Missing references: %s\n' "$missing_count"
+  if [ -n "$records" ]; then
+    printf '\n'
+    while IFS="$(printf '\t')" read -r kind key raw full status; do
+      [ -n "$key" ] || continue
+      printf '  - [%s] %s.%s -> %s\n' "$status" "$kind" "$key" "$raw"
+      if [ "$status" = "missing" ]; then
+        printf '    missing: %s\n' "$full"
+      fi
+    done <<EOF
+$records
+EOF
+  fi
+  printf '\nNext action: %s\n' "$(context_human_next_action "$next_action")"
+  printf '\nReminder: context-check is read-only. It reports missing pointers but never creates context-index, refreshes baseline docs, or blocks work.\n'
 }
 
 state_apply_options() {
@@ -1016,6 +1201,20 @@ case "${1:-}" in
   recall)
     shift
     run_recall "$@"
+    ;;
+  context-check)
+    case "${2:-}" in
+      "")
+        run_context_check human
+        ;;
+      --json)
+        run_context_check json
+        ;;
+      *)
+        printf '错误：未知 context-check 参数：%s\n' "$2" >&2
+        exit 1
+        ;;
+    esac
     ;;
   install-hooks)
     [ "$#" -eq 1 ] || {

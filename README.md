@@ -46,7 +46,7 @@ examples/demo/case-evidence-closure/run-case.sh
 
 它会真实执行测试并输出 `verify passed: 6/6 checks`，然后打印这次需求产生的全部产物路径——一次 20 多行的小改动，也能留下可复跑的验证、独立落盘的合规报告和逐项对账的收口清单。
 
-仓库里有三个体验入口（纸面演练 / 轻量模式 / 完整模式），该先看哪个、分别演示什么，[start-here](docs/start-here.md) 里有说明；想直接挑，见下方[三个 demo 入口](#三个-demo-入口)。
+仓库里有三个体验入口（纸面演练 / 轻量模式 / 完整模式），该先看哪个、分别演示什么，[start-here](docs/start-here.md) 里有说明；想直接挑，见下方[三个 demo 入口](#2-三个-demo-入口)。
 
 适合谁：正在用 Codex、Claude Code、Cursor 等 AI Coding 工具，觉得「写得快、但维护和交接变难」的个人开发者和小团队。
 

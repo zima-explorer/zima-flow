@@ -32,15 +32,21 @@ zimaflow 是一套轻量 AI Coding 工作流，用来把一句粗略需求整理
 
 这个仓库是公开发行版，只保留经过发行审查的主链路，比完整开发流程更精简。
 
-## 最短试用路径（约 10 分钟）
+## 第一次来？从这里开始
 
-第一次来、想快速判断它是否对你有用，按这个顺序走：
+> **[docs/start-here.md](docs/start-here.md)** —— 约 15 分钟，一页把开源地址、快速开始、可复制的产物模板和完整案例串起来。
 
-1. **30 秒确认能跑**：`git clone` 后运行 `bin/zimaflow close`，立即看到收口检查输出（见下方[快速开始](#快速开始)）。
-2. **3 分钟看纸面主链路**：[examples/demo/](examples/demo/README.md) 用一句需求把 brief → spec → handover 的产物摆给你看。
-3. **4 分钟看证据怎么收口**：[examples/demo/case-evidence-closure/](examples/demo/case-evidence-closure/README.md) 有可跑的代码改动和测试证据，演示一次**轻量模式**的小需求如何产出可复跑的验证、独立落盘的合规报告和逐项对账的收口清单。
-4. **5 分钟看跨 session 闭环**：[examples/demo/case-cross-session/](examples/demo/case-cross-session/README.md) 走**完整模式**，演示一次小需求如何跨 session 用 `state` / `recall` / `handover` 恢复上下文并收口。
-5. **想深入**：读 [docs/getting-started.md](docs/getting-started.md) 与 [docs/workflow-overview.md](docs/workflow-overview.md)。
+不想跳转，就先跑这一条：
+
+```bash
+git clone https://github.com/zima-explorer/zima-flow.git
+cd zima-flow
+examples/demo/case-evidence-closure/run-case.sh
+```
+
+它会真实执行测试并输出 `verify passed: 6/6 checks`，然后打印这次需求产生的全部产物路径——一次 20 多行的小改动，也能留下可复跑的验证、独立落盘的合规报告和逐项对账的收口清单。
+
+仓库里有三个体验入口（纸面演练 / 轻量模式 / 完整模式），该先看哪个、分别演示什么，[start-here](docs/start-here.md) 里有说明；想直接挑，见下方[三个 demo 入口](#三个-demo-入口)。
 
 适合谁：正在用 Codex、Claude Code、Cursor 等 AI Coding 工具，觉得「写得快、但维护和交接变难」的个人开发者和小团队。
 
@@ -144,7 +150,19 @@ bin/zimaflow close
 
 会立即输出当前仓库的 git 状态和下一步建议——这是最小的可运行证明。
 
-### 2. 3 分钟看一条真实需求走完主链路
+### 2. 三个 demo 入口
+
+仓库里有三个体验入口，载体都是同一个 todo CLI，区别在**重量**不是完整度：
+
+| 入口 | 演示什么 | 命令 |
+|------|----------|------|
+| `examples/demo/` | **纸面演练**：产物长什么样 | `examples/demo/run-demo.sh` |
+| [`case-evidence-closure/`](examples/demo/case-evidence-closure/README.md) | **轻量模式**：证据怎么收口 | `examples/demo/case-evidence-closure/run-case.sh` |
+| [`case-cross-session/`](examples/demo/case-cross-session/README.md) | **完整模式**：跨 session 怎么接上 | `examples/demo/case-cross-session/run-case.sh` |
+
+不确定先看哪个，按 [start-here](docs/start-here.md) 的顺序走。
+
+#### 纸面演练：3 分钟看一条需求走完主链路
 
 demo 用一句需求 `Add a tiny todo list CLI ...` 演练了整条链路，产物直接看这几个文件：
 
@@ -156,9 +174,9 @@ demo 用一句需求 `Add a tiny todo list CLI ...` 演练了整条链路，产�
 
 走查引导见 [examples/demo/README.md](examples/demo/README.md)。
 
-### 2.5 想看真实代码 + 验证证据
+#### 两个真实案例：真实代码 + 验证证据
 
-上面的 demo 是纸面演练，帮你理解产物形态。另外两个案例有**真实代码改动和真实测试证据**，载体是同一个 todo CLI，但走的是不同重量的路径：
+上面的 demo 是纸面演练，帮你理解产物形态。另外两个案例有**真实代码改动和真实测试证据**：
 
 ```bash
 examples/demo/case-evidence-closure/run-case.sh   # 轻量模式：证据收口

@@ -1,0 +1,4277 @@
+#!/usr/bin/env bash
+set -u
+
+VERSION="1.22.3"
+ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+zimaflow - lightweight workflow guardrails
+
+Usage:
+  zimaflow close [--json]
+  zimaflow state [--json]
+  zimaflow state init <change> [options]
+  zimaflow state update <change> [options]
+  zimaflow project init [--name NAME] [--docs-root PATH] [--json]
+  zimaflow project show [--docs-root PATH] [--json]
+  zimaflow recall [--json] [--days N] [--summary-lines N]
+  zimaflow recall --project <name> [--json] [--days N] [--summary-lines N]
+  zimaflow recall --all [--json] [--days N] [--summary-lines N]
+  zimaflow release-check [--json]
+  zimaflow context-check [--json]
+  zimaflow stale-review [--json] [--days N] [--include-rules]
+  zimaflow knowledge-record --knowledge-id ID --event-type TYPE [options]
+  zimaflow drift-check <change> [--json] [--write]
+  zimaflow execution-input <change> --write [--json]
+  zimaflow host-profile <host> [--json]
+  zimaflow doctor <host> [--json] [options]
+  zimaflow runtime install|upgrade|repair|remove <host> --install-root <temporary-root> [--desired-version VERSION] [--json]
+  zimaflow install-hooks [--strict]
+  zimaflow --help
+
+Commands:
+  close                 Run a lightweight session close checklist.
+  close --json          Emit a stable JSON checklist for agents and tools.
+  state                 Show per-change .zimaflow-state.yaml summaries.
+  state --json          Emit state summaries as JSON.
+  state init <change>   Create openspec/changes/<change>/.zimaflow-state.yaml.
+  state update <change> Update selected fields in an existing state file.
+  project init          Create the portable .zimaflow/project.yaml contract.
+  project show          Resolve project/docs context without writing files.
+  recall                Summarize active changes + bit-rot to pick work back up.
+  recall --json         Emit the recall summary as JSON.
+  recall --days N       Bit-rot threshold in days (default 30).
+  recall --summary-lines N
+                        Max handover summary lines per change (default 8).
+  recall --project <name>
+                        Recall one registered project by name (no cd needed).
+  recall --all          Cross-project overview from ~/.zimaflow/projects.yaml.
+                        --summary-lines N opts into per-change handover summaries.
+                        ZIMAFLOW_PROJECT_REGISTRY explicitly enables legacy Markdown input.
+  release-check         Pre-release readiness checklist + 4 human-confirm questions.
+  release-check --json  Emit the release readiness summary as JSON.
+  context-check         Check thin context-index baseline/workflow references.
+  context-check --json  Emit the context-index check as JSON.
+  stale-review          List knowledge entries with no recent cited/applied usage.
+  stale-review --json   Emit stale-review candidates as JSON.
+  knowledge-record      Append one validated event to the global knowledge ledger.
+  drift-check <change>  Compare artifact hashes stored in .zimaflow-state.yaml.
+  drift-check --write   Write or refresh artifact hash baselines.
+  execution-input       Write a derived implementation-input snapshot for a full/hotfix change.
+  host-profile          Report host discovery and packaging capabilities.
+  doctor                Read-only host capability diagnostic with resumable intent.
+  runtime               Manage a generated host runtime under an explicit temporary root.
+  install-hooks         Install non-blocking git hook reminders.
+  install-hooks --strict
+                        Reserved for future blocking checks; currently installs reminders only.
+
+State options:
+  --phase <phase>
+  --mode <mode>
+  --contract <path>
+  --decision <path>
+  --branch <branch>
+  --worktree <path>
+  --verify <status>
+  --full-tests <status>
+  --last-command <command>
+  --last-result <result>
+  --evidence-path <path-or-url>
+  --blocked-reason <reason>
+  --archive-status <status>
+  --handover <path>
+
+Doctor options:
+  --json
+  --project <path>
+  --capability <logical-capability-id>
+  --intent <raw-user-intent>
+  --dispatch-context <context>
+  --cli-path <path>
+  --cli-version <version>
+  --protocol-version <version>
+  --runtime-manifest <path>
+  --permission-status <granted|denied>
+EOF
+}
+
+find_git_root() {
+  git rev-parse --show-toplevel 2>/dev/null
+}
+
+find_state_root() {
+  if [ -d "openspec/changes" ]; then
+    pwd
+    return 0
+  fi
+  find_git_root
+}
+
+json_escape() {
+  sed \
+    -e 's/\\/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/	/\\t/g'
+}
+
+json_string() {
+  printf '"%s"' "$(printf '%s' "$1" | json_escape)"
+}
+
+json_string_array() {
+  local lines="$1"
+  local first="yes"
+  printf '['
+  if [ -n "$lines" ]; then
+    while IFS= read -r line; do
+      if [ "$first" = "no" ]; then
+        printf ','
+      fi
+      json_string "$line"
+      first="no"
+    done <<EOF
+$lines
+EOF
+  fi
+  printf ']'
+}
+
+yaml_clean_value() {
+  sed \
+    -e 's/^"//' \
+    -e 's/"$//' \
+    -e "s/^'//" \
+    -e "s/'$//"
+}
+
+yaml_top_value() {
+  local file="$1"
+  local key="$2"
+  awk -v key="$key:" '
+    $1 == key {
+      sub("^[[:space:]]*" key "[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$file" 2>/dev/null | yaml_clean_value
+}
+
+yaml_nested_value() {
+  local file="$1"
+  local section="$2"
+  local key="$3"
+  awk -v section="$section:" -v key="$key:" '
+    $1 == section { in_section = 1; next }
+    in_section && $0 !~ /^[[:space:]]/ { in_section = 0 }
+    in_section && $1 == key {
+      sub("^[[:space:]]*" key "[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$file" 2>/dev/null | yaml_clean_value
+}
+
+find_zimaflow_home() {
+  if [ -n "${ZIMAFLOW_HOME:-}" ] && [ -f "$ZIMAFLOW_HOME/references/host-capabilities.yaml" ]; then
+    printf '%s' "$ZIMAFLOW_HOME"
+    return 0
+  fi
+
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  cd "$script_dir/.." && pwd
+}
+
+canonical_path_for_write() {
+  local requested="$1"
+  local probe="$requested"
+  local suffix=""
+
+  while [ ! -e "$probe" ] && [ "$probe" != "/" ]; do
+    if [ -n "$suffix" ]; then
+      suffix="$(basename "$probe")/$suffix"
+    else
+      suffix="$(basename "$probe")"
+    fi
+    probe="$(dirname "$probe")"
+  done
+
+  [ -d "$probe" ] || return 1
+  local canonical
+  canonical="$(cd "$probe" 2>/dev/null && pwd -P)" || return 1
+  if [ -n "$suffix" ]; then
+    printf '%s/%s' "${canonical%/}" "$suffix"
+  else
+    printf '%s' "$canonical"
+  fi
+}
+
+validate_project_name() {
+  case "$1" in
+    ""|*[!A-Za-z0-9._-]*|[.-]*|*..*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+validate_safe_relative_path() {
+  case "$1" in
+    ""|/*|"~"|"~"/*|./*|*/./*|*/.|..|../*|*/../*|*/..|*//*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+validate_absolute_path_shape() {
+  case "$1" in
+    ""|./*|*/./*|*/.|..|../*|*/../*|*/..|*//*) return 1 ;;
+    /*|"~"|"~"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+expand_user_path() {
+  local value="$1"
+  validate_absolute_path_shape "$value" || return 1
+  case "$value" in
+    "~") [ -n "${HOME:-}" ] || return 1; printf '%s' "$HOME" ;;
+    "~/"*) [ -n "${HOME:-}" ] || return 1; printf '%s/%s' "${HOME%/}" "${value#\~/}" ;;
+    /*) printf '%s' "$value" ;;
+  esac
+}
+
+resolve_projects_file() {
+  local requested
+  if [ "${ZIMAFLOW_PROJECTS_FILE+x}" = "x" ]; then
+    requested="$ZIMAFLOW_PROJECTS_FILE"
+    case "$requested" in /*) ;; *) echo "ZIMAFLOW_PROJECTS_FILE must be an absolute path." >&2; return 2 ;; esac
+  else
+    [ -n "${HOME:-}" ] || { echo "HOME is required when ZIMAFLOW_PROJECTS_FILE is not set." >&2; return 2; }
+    requested="$HOME/.zimaflow/projects.yaml"
+  fi
+  if [ -f "$requested" ]; then
+    local parent
+    parent="$(cd "$(dirname "$requested")" 2>/dev/null && pwd -P)" || {
+      echo "Unable to resolve projects file: $requested" >&2
+      return 2
+    }
+    printf '%s/%s' "$parent" "$(basename "$requested")"
+  else
+    canonical_path_for_write "$requested" || { echo "Unable to resolve projects file: $requested" >&2; return 2; }
+  fi
+}
+
+project_manifest_row() {
+  local file="$1"
+  awk '
+    function clean(v, f, l) {
+      sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+      f = substr(v, 1, 1); l = substr(v, length(v), 1)
+      if ((f == "\"" && l == "\"") || (f == "\047" && l == "\047")) v = substr(v, 2, length(v) - 2)
+      return v
+    }
+    /^[[:space:]]*($|#)/ { next }
+    /^[[:space:]]/ { bad = 1; next }
+    {
+      key = $0; sub(/:.*/, "", key)
+      value = $0; sub(/^[^:]*:[[:space:]]*/, "", value)
+      if (key != "schema_version" && key != "name" && key != "docs_root") { bad = 1; next }
+      if (seen[key]++) { bad = 1; next }
+      values[key] = clean(value)
+    }
+    END {
+      if (bad || !seen["schema_version"] || !seen["name"] || !seen["docs_root"] || values["schema_version"] != "1") exit 2
+      printf "%s\t%s\t%s\n", values["schema_version"], values["name"], values["docs_root"]
+    }
+  ' "$file" 2>/dev/null || { echo "Invalid project manifest: $file" >&2; return 2; }
+}
+
+project_manifest_value() {
+  local file="$1" key="$2" row schema name docs_root
+  row="$(project_manifest_row "$file")" || return
+  IFS=$'\t' read -r schema name docs_root <<EOF
+$row
+EOF
+  case "$key" in
+    schema_version) printf '%s' "$schema" ;;
+    name) printf '%s' "$name" ;;
+    docs_root) printf '%s' "$docs_root" ;;
+    *) return 2 ;;
+  esac
+}
+
+projects_registry_entries() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  awk '
+    function clean(v, f, l) {
+      sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+      f = substr(v, 1, 1); l = substr(v, length(v), 1)
+      if ((f == "\"" && l == "\"") || (f == "\047" && l == "\047")) v = substr(v, 2, length(v) - 2)
+      return v
+    }
+    function emit() {
+      if (!in_entry) return
+      if (!has_name || !has_code || !has_docs || !has_status) { bad = 1; return }
+      printf "%s\t%s\t%s\t%s\n", name, code_root, docs_root, status
+    }
+    /^[[:space:]]*($|#)/ { next }
+    /^schema_version:[[:space:]]*/ {
+      if (seen_schema++) { bad = 1; next }
+      v = $0; sub(/^[^:]*:[[:space:]]*/, "", v); if (clean(v) != "1") bad = 1
+      next
+    }
+    /^projects:[[:space:]]*$/ { if (seen_projects++) bad = 1; next }
+    /^  - name:[[:space:]]*/ {
+      emit(); in_entry = 1; delete seen_field
+      has_name = has_code = has_docs = has_status = 0
+      v = $0; sub(/^  - name:[[:space:]]*/, "", v); name = clean(v)
+      has_name = 1; seen_field["name"] = 1; next
+    }
+    /^    (code_root|docs_root|status):[[:space:]]*/ {
+      if (!in_entry) { bad = 1; next }
+      key = $0; sub(/^    /, "", key); sub(/:.*/, "", key)
+      if (seen_field[key]++) { bad = 1; next }
+      v = $0; sub(/^    [^:]*:[[:space:]]*/, "", v); v = clean(v)
+      if (key == "code_root") { code_root = v; has_code = 1 }
+      if (key == "docs_root") { docs_root = v; has_docs = 1 }
+      if (key == "status") { status = v; has_status = 1 }
+      next
+    }
+    { bad = 1 }
+    END { emit(); if (bad || !seen_schema || !seen_projects) exit 2 }
+  ' "$file" || { echo "Invalid projects registry: $file" >&2; return 2; }
+}
+
+resolve_project_context() {
+  local requested_root="${1:-}" cli_docs_root="${2:-}"
+  local code_root project_config projects_file initialized project_name project_docs_root
+  local docs_root docs_root_source manifest_row schema
+  [ -n "$requested_root" ] || requested_root="$(find_git_root 2>/dev/null || true)"
+  [ -n "$requested_root" ] && [ -d "$requested_root" ] || { echo "Not inside a git repository." >&2; return 2; }
+  code_root="$(cd "$requested_root" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || { echo "Not inside a git repository." >&2; return 2; }
+  code_root="$(cd "$code_root" && pwd -P)"
+  project_config="$code_root/.zimaflow/project.yaml"
+  projects_file="$(resolve_projects_file)" || return
+  initialized=false
+  project_name="$(basename "$code_root")"
+  project_docs_root="docs/zimaflow"
+
+  if [ -f "$project_config" ]; then
+    manifest_row="$(project_manifest_row "$project_config")" || return
+    IFS=$'\t' read -r schema project_name project_docs_root <<EOF
+$manifest_row
+EOF
+    validate_project_name "$project_name" || { echo "Invalid project name in manifest: $project_name" >&2; return 2; }
+    validate_safe_relative_path "$project_docs_root" || { echo "Invalid docs_root in project manifest: $project_docs_root" >&2; return 2; }
+    initialized=true
+  fi
+
+  docs_root="$(canonical_path_for_write "$code_root/$project_docs_root")" || return 2
+  docs_root_source=project
+  [ "$initialized" = true ] || docs_root_source=default
+
+  if [ -f "$projects_file" ]; then
+    local entries entry_name entry_code entry_docs entry_status expanded_code expanded_docs name_match_docs=""
+    entries="$(projects_registry_entries "$projects_file")" || return
+    while IFS=$'\t' read -r entry_name entry_code entry_docs entry_status; do
+      [ -n "$entry_name" ] || continue
+      validate_project_name "$entry_name" || { echo "Invalid project name in registry: $entry_name" >&2; return 2; }
+      case "$entry_status" in active|inactive) ;; *) echo "Invalid project status in registry: $entry_status" >&2; return 2 ;; esac
+      expanded_code="$(expand_user_path "$entry_code")" || { echo "Invalid code_root in registry: $entry_code" >&2; return 2; }
+      expanded_docs="$(expand_user_path "$entry_docs")" || { echo "Invalid docs_root in registry: $entry_docs" >&2; return 2; }
+      expanded_code="$(canonical_path_for_write "$expanded_code")" || return 2
+      expanded_docs="$(canonical_path_for_write "$expanded_docs")" || return 2
+      if [ "$entry_status" = active ] && [ "$expanded_code" = "$code_root" ]; then
+        docs_root="$expanded_docs"; docs_root_source=user; name_match_docs=""; break
+      fi
+      if [ "$entry_status" = active ] && [ -z "$name_match_docs" ] && [ "$(printf '%s' "$entry_name" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$project_name" | tr '[:upper:]' '[:lower:]')" ]; then
+        name_match_docs="$expanded_docs"
+      fi
+    done <<EOF
+$entries
+EOF
+    if [ "$docs_root_source" != user ] && [ -n "$name_match_docs" ]; then docs_root="$name_match_docs"; docs_root_source=user; fi
+  fi
+
+  if [ -n "$cli_docs_root" ]; then
+    local expanded_cli
+    case "$cli_docs_root" in
+      /*|"~"|"~"/*) expanded_cli="$(expand_user_path "$cli_docs_root")" || { echo "Invalid --docs-root: $cli_docs_root" >&2; return 2; } ;;
+      *) validate_safe_relative_path "$cli_docs_root" || { echo "Invalid --docs-root: $cli_docs_root" >&2; return 2; }; expanded_cli="$code_root/$cli_docs_root" ;;
+    esac
+    docs_root="$(canonical_path_for_write "$expanded_cli")" || return 2
+    docs_root_source=cli
+  fi
+
+  printf '1\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$project_name" "$code_root" "$docs_root" "$project_config" "$projects_file" "$docs_root_source" "$initialized"
+}
+
+print_project_json() {
+  local context="$1" written="${2:-}" schema project_name code_root docs_root project_config projects_file docs_root_source initialized
+  IFS=$'\t' read -r schema project_name code_root docs_root project_config projects_file docs_root_source initialized <<EOF
+$context
+EOF
+  printf '{"schema_version":%s,"project_name":' "$schema"; json_string "$project_name"
+  printf ',"code_root":'; json_string "$code_root"
+  printf ',"docs_root":'; json_string "$docs_root"
+  printf ',"project_config":'; json_string "$project_config"
+  printf ',"projects_file":'; json_string "$projects_file"
+  printf ',"docs_root_source":'; json_string "$docs_root_source"
+  printf ',"initialized":%s' "$initialized"
+  [ -z "$written" ] || printf ',"written":%s' "$written"
+  printf '}\n'
+}
+
+print_project_human() {
+  local context="$1" written="${2:-}" schema project_name code_root docs_root project_config projects_file docs_root_source initialized
+  IFS=$'\t' read -r schema project_name code_root docs_root project_config projects_file docs_root_source initialized <<EOF
+$context
+EOF
+  echo "Zimaflow project: $project_name"
+  echo "Code root: $code_root"
+  echo "Docs root: $docs_root ($docs_root_source)"
+  echo "Project config: $project_config"
+  echo "Projects file: $projects_file"
+  echo "Initialized: $initialized"
+  [ -z "$written" ] || echo "Written: $written"
+  [ "$initialized" = true ] || echo "Next action: zimaflow project init"
+}
+
+run_project() {
+  local action="${1:-}"
+  shift || true
+  case "$action" in init|show) ;; *) echo "Unknown project action: $action" >&2; return 2 ;; esac
+  local format=human name="" docs_override=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json) format=json; shift ;;
+      --name) [ "$action" = init ] && [ "$#" -ge 2 ] || { echo "--name is valid only for project init." >&2; return 2; }; name="$2"; shift 2 ;;
+      --docs-root) [ "$#" -ge 2 ] || { echo "--docs-root requires a value." >&2; return 2; }; docs_override="$2"; shift 2 ;;
+      *) echo "Unknown project option: $1" >&2; return 2 ;;
+    esac
+  done
+
+  local root project_config context written=false
+  root="$(find_git_root)" || { echo "Not inside a git repository." >&2; return 2; }
+  root="$(cd "$root" && pwd -P)"
+  project_config="$root/.zimaflow/project.yaml"
+  if [ "$action" = init ] && [ ! -f "$project_config" ]; then
+    [ -n "$name" ] || name="$(basename "$root")"
+    [ -n "$docs_override" ] || docs_override="docs/zimaflow"
+    validate_project_name "$name" || { echo "Invalid project name: $name" >&2; return 2; }
+    validate_safe_relative_path "$docs_override" || { echo "Invalid committed docs_root: $docs_override" >&2; return 2; }
+    mkdir -p "$root/.zimaflow" "$root/$docs_override" || return 2
+    local temp_manifest
+    temp_manifest="$(mktemp "$root/.zimaflow/project.yaml.tmp.XXXXXX")" || return 2
+    { printf 'schema_version: 1\n'; printf 'name: %s\n' "$name"; printf 'docs_root: %s\n' "$docs_override"; } > "$temp_manifest"
+    chmod 644 "$temp_manifest"
+    mv "$temp_manifest" "$project_config"
+    written=true
+  fi
+  local context_docs_override="$docs_override"
+  [ "$action" = init ] && context_docs_override=""
+  context="$(resolve_project_context "$root" "$context_docs_override")" || return
+  if [ "$format" = json ]; then
+    if [ "$action" = init ]; then print_project_json "$context" "$written"; else print_project_json "$context"; fi
+  else
+    if [ "$action" = init ]; then print_project_human "$context" "$written"; else print_project_human "$context"; fi
+  fi
+}
+
+resolve_knowledge_data_home() {
+  local requested
+  if [ "${ZIMAFLOW_DATA_HOME+x}" = "x" ]; then
+    requested="$ZIMAFLOW_DATA_HOME"
+  else
+    if [ -z "${HOME:-}" ]; then
+      echo "HOME is required when ZIMAFLOW_DATA_HOME is not set." >&2
+      return 2
+    fi
+    requested="$HOME/.zimaflow/data"
+  fi
+  case "$requested" in
+    ""|/*/../*|*/..|/*/./*|*/.|*//* )
+      echo "Unsafe ZIMAFLOW_DATA_HOME path." >&2
+      return 2
+      ;;
+    /*) ;;
+    *)
+      echo "ZIMAFLOW_DATA_HOME must be an absolute path." >&2
+      return 2
+      ;;
+  esac
+
+  local resolved home_resolved capability_root
+  resolved="$(canonical_path_for_write "$requested")" || {
+    echo "Cannot resolve ZIMAFLOW_DATA_HOME." >&2
+    return 2
+  }
+  home_resolved="$(canonical_path_for_write "${HOME:-/}")" || home_resolved="${HOME:-/}"
+  capability_root="$(find_zimaflow_home)"
+  capability_root="$(cd "$capability_root" 2>/dev/null && pwd -P)" || return 2
+
+  case "$resolved" in
+    /|"$home_resolved"|"$capability_root"|"$capability_root"/*)
+      echo "Unsafe ZIMAFLOW_DATA_HOME path." >&2
+      return 2
+      ;;
+  esac
+
+  local ancestor="$resolved"
+  while [ "$ancestor" != "/" ]; do
+    if [ -f "$ancestor/.claude-plugin/plugin.json" ] \
+      || [ -f "$ancestor/.codex-plugin/plugin.json" ] \
+      || [ -f "$ancestor/runtime-manifest.yaml" ]; then
+      echo "ZIMAFLOW_DATA_HOME cannot be inside a generated Plugin/runtime." >&2
+      return 2
+    fi
+    ancestor="$(dirname "$ancestor")"
+  done
+
+  printf '%s' "$resolved"
+}
+
+valid_knowledge_record_value() {
+  local value="$1"
+  [ -n "$value" ] || return 1
+  case "$value" in
+    *$'\n'*|*$'\r'*) return 1 ;;
+  esac
+  if printf '%s' "$value" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    return 1
+  fi
+}
+
+run_knowledge_record() {
+  local knowledge_id=""
+  local event_type=""
+  local project=""
+  local session=""
+  local stage=""
+  local trigger=""
+  local reason=""
+  local format="human"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --knowledge-id|--event-type|--project|--session|--stage|--trigger|--reason)
+        [ "${2+x}" ] || { echo "Missing value for $1" >&2; return 2; }
+        case "$1" in
+          --knowledge-id) knowledge_id="$2" ;;
+          --event-type) event_type="$2" ;;
+          --project) project="$2" ;;
+          --session) session="$2" ;;
+          --stage) stage="$2" ;;
+          --trigger) trigger="$2" ;;
+          --reason) reason="$2" ;;
+        esac
+        shift 2
+        ;;
+      --json)
+        format="json"
+        shift
+        ;;
+      *)
+        echo "Unknown knowledge-record option: $1" >&2
+        return 2
+        ;;
+    esac
+  done
+
+  local field value
+  for field in knowledge_id event_type project session stage trigger reason; do
+    case "$field" in
+      knowledge_id) value="$knowledge_id" ;;
+      event_type) value="$event_type" ;;
+      project) value="$project" ;;
+      session) value="$session" ;;
+      stage) value="$stage" ;;
+      trigger) value="$trigger" ;;
+      reason) value="$reason" ;;
+    esac
+    if ! valid_knowledge_record_value "$value"; then
+      echo "Missing or invalid knowledge-record field: $field" >&2
+      return 2
+    fi
+  done
+  case "$event_type" in
+    loaded|cited|applied|challenged|stale_review) ;;
+    *)
+      echo "Invalid knowledge event type: $event_type" >&2
+      return 2
+      ;;
+  esac
+
+  local data_home
+  data_home="$(resolve_knowledge_data_home)" || return $?
+  if [ -e "$data_home" ] && [ ! -d "$data_home" ]; then
+    echo "ZIMAFLOW_DATA_HOME is not a directory." >&2
+    return 2
+  fi
+
+  umask 077
+  mkdir -p "$data_home" || {
+    echo "Cannot create ZIMAFLOW_DATA_HOME." >&2
+    return 1
+  }
+  chmod 700 "$data_home" || {
+    echo "Cannot secure ZIMAFLOW_DATA_HOME." >&2
+    return 1
+  }
+
+  local ledger_path="$data_home/knowledge-usage-ledger.jsonl"
+  local lessons_path="$data_home/lessons-common.md"
+  local lock_path="$data_home/.knowledge-usage-ledger.lock"
+  if ! mkdir "$lock_path" 2>/dev/null; then
+    echo "Knowledge ledger is locked by another writer." >&2
+    return 1
+  fi
+
+  if [ -L "$ledger_path" ] || { [ -e "$ledger_path" ] && [ ! -f "$ledger_path" ]; }; then
+    rmdir "$lock_path" 2>/dev/null || true
+    echo "Knowledge ledger path is not a regular file." >&2
+    return 1
+  fi
+  if [ -L "$lessons_path" ] || { [ -e "$lessons_path" ] && [ ! -f "$lessons_path" ]; }; then
+    rmdir "$lock_path" 2>/dev/null || true
+    echo "User lessons path is not a regular file." >&2
+    return 1
+  fi
+  if [ ! -e "$lessons_path" ]; then
+    local lessons_tmp
+    lessons_tmp="$(mktemp "$data_home/.lessons-common.XXXXXX")" || {
+      rmdir "$lock_path" 2>/dev/null || true
+      echo "Cannot initialize user lessons." >&2
+      return 1
+    }
+    printf '# Cross-project lessons\n\n' > "$lessons_tmp"
+    chmod 600 "$lessons_tmp"
+    mv "$lessons_tmp" "$lessons_path" || {
+      rm -f "$lessons_tmp"
+      rmdir "$lock_path" 2>/dev/null || true
+      echo "Cannot initialize user lessons." >&2
+      return 1
+    }
+  fi
+
+  local timestamp event_id event_json nonce_file nonce
+  timestamp="$(now_iso | sed -E 's/([+-][0-9]{2})([0-9]{2})$/\1:\2/')"
+  nonce_file="$(mktemp "$data_home/.knowledge-event.XXXXXX")" || {
+    rmdir "$lock_path" 2>/dev/null || true
+    echo "Cannot allocate a unique knowledge event ID." >&2
+    return 1
+  }
+  nonce="$(basename "$nonce_file")"
+  nonce="${nonce#.knowledge-event.}"
+  rm -f "$nonce_file"
+  event_id="use-$(date '+%Y%m%d')-$(now_epoch)-$$-$nonce"
+  event_json="$(
+    printf '{"event_id":'; json_string "$event_id"
+    printf ',"knowledge_id":'; json_string "$knowledge_id"
+    printf ',"event_type":'; json_string "$event_type"
+    printf ',"project":'; json_string "$project"
+    printf ',"session":'; json_string "$session"
+    printf ',"stage":'; json_string "$stage"
+    printf ',"trigger":'; json_string "$trigger"
+    printf ',"reason":'; json_string "$reason"
+    printf ',"timestamp":'; json_string "$timestamp"
+    printf '}'
+  )"
+
+  if ! { : >> "$ledger_path" && chmod 600 "$ledger_path" && printf '%s\n' "$event_json" >> "$ledger_path"; }; then
+    rmdir "$lock_path" 2>/dev/null || true
+    echo "Cannot append knowledge usage event." >&2
+    return 1
+  fi
+  rmdir "$lock_path" 2>/dev/null || {
+    echo "Cannot release knowledge ledger lock." >&2
+    return 1
+  }
+
+  if [ "$format" = "json" ]; then
+    printf '{"written":true,"event_id":'; json_string "$event_id"
+    printf ',"ledger_path":'; json_string "$ledger_path"
+    printf ',"event_type":'; json_string "$event_type"
+    printf ',"knowledge_id":'; json_string "$knowledge_id"
+    printf '}\n'
+    return 0
+  fi
+
+  echo "Zimaflow knowledge record"
+  echo
+  echo "Written: yes"
+  printf 'Event ID: %s\n' "$event_id"
+  printf 'Event type: %s\n' "$event_type"
+  printf 'Knowledge ID: %s\n' "$knowledge_id"
+  printf 'Ledger: %s\n' "$ledger_path"
+}
+
+json_bool_or_string() {
+  case "$1" in
+    true|false) printf '%s' "$1" ;;
+    *) json_string "$1" ;;
+  esac
+}
+
+json_csv_array() {
+  local values="$1"
+  local first="yes"
+  local value
+  local old_ifs="$IFS"
+  IFS=','
+  printf '['
+  for value in $values; do
+    [ -n "$value" ] || continue
+    if [ "$first" = "no" ]; then
+      printf ','
+    fi
+    json_string "$value"
+    first="no"
+  done
+  printf ']'
+  IFS="$old_ifs"
+}
+
+run_host_profile() {
+  local host="${1:-}"
+  shift || true
+
+  case "$host" in
+    codex|workbuddy|claude-code) ;;
+    "")
+      echo "Missing host. Available hosts: codex, workbuddy, claude-code" >&2
+      return 2
+      ;;
+    *)
+      echo "Unknown host: $host. Available hosts: codex, workbuddy, claude-code" >&2
+      return 2
+      ;;
+  esac
+
+  local output_mode="human"
+  if [ "${1:-}" = "--json" ]; then
+    output_mode="json"
+    shift
+  fi
+  if [ "$#" -gt 0 ]; then
+    echo "Unknown host-profile option: $1" >&2
+    return 2
+  fi
+
+  local zimaflow_home profile_file
+  zimaflow_home="$(find_zimaflow_home)"
+  profile_file="$zimaflow_home/references/host-capabilities.yaml"
+  if [ ! -f "$profile_file" ]; then
+    echo "Host capability profile not found: $profile_file" >&2
+    return 2
+  fi
+
+  local schema_version canonical_source logical_skill_ids host_paths_in_core
+  local support_tier evidence_status discovery_mode skill_entry_layout
+  local nested_project_scopes arbitrary_root_recursion symlink_entry
+  local packaging_preferred packaging_fallbacks evidence_url
+
+  schema_version="$(yaml_top_value "$profile_file" "schema_version")"
+  canonical_source="$(yaml_nested_value "$profile_file" "core" "canonical_source")"
+  logical_skill_ids="$(yaml_nested_value "$profile_file" "core" "logical_skill_ids")"
+  host_paths_in_core="$(yaml_nested_value "$profile_file" "core" "host_paths_in_core")"
+  support_tier="$(yaml_nested_value "$profile_file" "$host" "support_tier")"
+  evidence_status="$(yaml_nested_value "$profile_file" "$host" "evidence_status")"
+  discovery_mode="$(yaml_nested_value "$profile_file" "$host" "discovery_mode")"
+  skill_entry_layout="$(yaml_nested_value "$profile_file" "$host" "skill_entry_layout")"
+  nested_project_scopes="$(yaml_nested_value "$profile_file" "$host" "nested_project_scopes")"
+  arbitrary_root_recursion="$(yaml_nested_value "$profile_file" "$host" "arbitrary_root_recursion")"
+  symlink_entry="$(yaml_nested_value "$profile_file" "$host" "symlink_entry")"
+  packaging_preferred="$(yaml_nested_value "$profile_file" "$host" "packaging_preferred")"
+  packaging_fallbacks="$(yaml_nested_value "$profile_file" "$host" "packaging_fallbacks")"
+  evidence_url="$(yaml_nested_value "$profile_file" "$host" "evidence_url")"
+
+  if [ "$schema_version" != "1" ]; then
+    echo "Unsupported host capability schema version: ${schema_version:-missing}" >&2
+    return 2
+  fi
+
+  if [ -z "$canonical_source" ] || \
+     [ -z "$logical_skill_ids" ] || [ -z "$host_paths_in_core" ]; then
+    echo "Invalid core host capability contract" >&2
+    return 2
+  fi
+
+  if [ -z "$support_tier" ] || [ -z "$evidence_status" ] || \
+     [ -z "$discovery_mode" ] || [ -z "$skill_entry_layout" ] || \
+     [ -z "$nested_project_scopes" ] || [ -z "$arbitrary_root_recursion" ] || \
+     [ -z "$symlink_entry" ] || [ -z "$packaging_preferred" ] || \
+     [ -z "$evidence_url" ]; then
+    echo "Invalid host capability profile for: $host" >&2
+    return 2
+  fi
+
+  if [ "$output_mode" = "json" ]; then
+    printf '{'
+    printf '"schema_version":%s,' "$schema_version"
+    printf '"host_id":'; json_string "$host"; printf ','
+    printf '"support_tier":'; json_string "$support_tier"; printf ','
+    printf '"evidence_status":'; json_string "$evidence_status"; printf ','
+    printf '"discovery":{'
+    printf '"mode":'; json_string "$discovery_mode"; printf ','
+    printf '"skill_entry_layout":'; json_string "$skill_entry_layout"; printf ','
+    printf '"nested_project_scopes":'; json_bool_or_string "$nested_project_scopes"; printf ','
+    printf '"arbitrary_root_recursion":'; json_bool_or_string "$arbitrary_root_recursion"; printf ','
+    printf '"symlink_entry":'; json_bool_or_string "$symlink_entry"
+    printf '},'
+    printf '"distribution":{'
+    printf '"preferred":'; json_string "$packaging_preferred"; printf ','
+    printf '"fallbacks":'; json_csv_array "$packaging_fallbacks"
+    printf '},'
+    printf '"core_contract":{'
+    printf '"canonical_source":'; json_string "$canonical_source"; printf ','
+    printf '"logical_skill_ids":'; json_bool_or_string "$logical_skill_ids"; printf ','
+    printf '"host_paths_in_core":'; json_bool_or_string "$host_paths_in_core"
+    printf '},'
+    printf '"evidence_url":'; json_string "$evidence_url"
+    printf '}\n'
+    return 0
+  fi
+
+  echo "Zimaflow host profile"
+  echo "Host: $host"
+  echo "Support tier: $support_tier"
+  echo "Evidence status: $evidence_status"
+  echo "Discovery mode: $discovery_mode"
+  echo "Packaging preferred: $packaging_preferred"
+  echo "Fallbacks: ${packaging_fallbacks:-none}"
+  echo "Canonical source: $canonical_source"
+  echo "Evidence: $evidence_url"
+}
+
+doctor_gap_metadata() {
+  case "$1" in
+    cli_missing) echo "error|true|install_cli|true" ;;
+    cli_version_incompatible) echo "error|true|upgrade_cli|true" ;;
+    project_not_initialized) echo "error|true|initialize_project|true" ;;
+    host_profile_missing) echo "error|true|restore_host_profile|true" ;;
+    capability_unavailable) echo "error|true|make_capability_available|true" ;;
+    runtime_missing) echo "error|true|install_runtime|true" ;;
+    runtime_drift) echo "error|true|regenerate_runtime|true" ;;
+    permission_denied) echo "error|true|grant_permission|false" ;;
+    contract_incompatible) echo "error|true|align_contract|true" ;;
+    *) return 2 ;;
+  esac
+}
+
+doctor_add_check() {
+  DOCTOR_CHECKS="${DOCTOR_CHECKS}${1}|${2}|${3}
+"
+}
+
+doctor_has_gap() {
+  local expected="$1"
+  printf '%s' "$DOCTOR_GAPS" | awk -F '|' -v expected="$expected" '$1 == expected { found = 1 } END { exit !found }'
+}
+
+doctor_add_gap() {
+  local code="$1"
+  local metadata severity blocking remediation_type can_resume
+  if doctor_has_gap "$code"; then
+    return 0
+  fi
+  metadata="$(doctor_gap_metadata "$code")" || return 2
+  IFS='|' read -r severity blocking remediation_type can_resume <<EOF
+$metadata
+EOF
+  DOCTOR_GAPS="${DOCTOR_GAPS}${code}|${severity}|${blocking}|${remediation_type}|${can_resume}
+"
+  if [ "$can_resume" = "false" ]; then
+    DOCTOR_AUTO_RESUME="false"
+  fi
+}
+
+doctor_csv_contains() {
+  local values="$1"
+  local expected="$2"
+  local item old_ifs="$IFS"
+  IFS=','
+  for item in $values; do
+    if [ "$item" = "$expected" ]; then
+      IFS="$old_ifs"
+      return 0
+    fi
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+doctor_next_action() {
+  if [ "$DOCTOR_OVERALL_STATUS" = "ready" ]; then
+    if [ -n "$DOCTOR_INTENT" ]; then printf 'continue_original_intent'; else printf 'doctor_complete'; fi
+    return 0
+  fi
+  if doctor_has_gap "project_not_initialized"; then printf 'initialize_project_then_resume_intent'; return 0; fi
+  if doctor_has_gap "cli_missing"; then printf 'install_cli_then_resume_intent'; return 0; fi
+  if doctor_has_gap "cli_version_incompatible"; then printf 'upgrade_cli_then_resume_intent'; return 0; fi
+  if doctor_has_gap "host_profile_missing"; then printf 'restore_host_profile_then_resume_intent'; return 0; fi
+  if doctor_has_gap "capability_unavailable"; then printf 'make_capability_available_then_resume_intent'; return 0; fi
+  if doctor_has_gap "runtime_missing"; then printf 'install_runtime_then_resume_intent'; return 0; fi
+  if doctor_has_gap "runtime_drift"; then printf 'regenerate_runtime_then_resume_intent'; return 0; fi
+  if doctor_has_gap "permission_denied"; then printf 'request_permission_confirmation'; return 0; fi
+  printf 'align_contract_then_resume_intent'
+}
+
+doctor_print_checks_json() {
+  local first="yes" id status detail
+  printf '['
+  while IFS='|' read -r id status detail; do
+    [ -n "$id" ] || continue
+    if [ "$first" = "no" ]; then printf ','; fi
+    printf '{"id":'; json_string "$id"; printf ',"status":'; json_string "$status"; printf ',"detail":'; json_string "$detail"; printf '}'
+    first="no"
+  done <<EOF
+$DOCTOR_CHECKS
+EOF
+  printf ']'
+}
+
+doctor_print_gaps_json() {
+  local first="yes" code severity blocking remediation_type can_resume
+  printf '['
+  while IFS='|' read -r code severity blocking remediation_type can_resume; do
+    [ -n "$code" ] || continue
+    if [ "$first" = "no" ]; then printf ','; fi
+    printf '{"code":'; json_string "$code"; printf ',"severity":'; json_string "$severity"; printf ',"blocking":%s' "$blocking"; printf ',"remediation_type":'; json_string "$remediation_type"; printf ',"auto_resume":%s}' "$can_resume"
+    first="no"
+  done <<EOF
+$DOCTOR_GAPS
+EOF
+  printf ']'
+}
+
+doctor_print_remediation_json() {
+  local first="yes" code severity blocking remediation_type can_resume
+  printf '['
+  while IFS='|' read -r code severity blocking remediation_type can_resume; do
+    [ -n "$code" ] || continue
+    if [ "$first" = "no" ]; then printf ','; fi
+    printf '{"gap_code":'; json_string "$code"; printf ',"type":'; json_string "$remediation_type"; printf ',"auto_resume":%s}' "$can_resume"
+    first="no"
+  done <<EOF
+$DOCTOR_GAPS
+EOF
+  printf ']'
+}
+
+doctor_print_json() {
+  local next_action="$1"
+  printf '{"schema_version":1,'
+  printf '"overall_status":'; json_string "$DOCTOR_OVERALL_STATUS"; printf ','
+  printf '"checks":'; doctor_print_checks_json; printf ','
+  printf '"capability_gaps":'; doctor_print_gaps_json; printf ','
+  printf '"remediation":'; doctor_print_remediation_json; printf ','
+  printf '"resume_intent":{"raw":'; json_string "$DOCTOR_INTENT"; printf ',"dispatch_context":'; json_string "$DOCTOR_DISPATCH_CONTEXT"; printf ',"auto_resume":%s}' "$DOCTOR_AUTO_RESUME"
+  printf ',"next_action":'; json_string "$next_action"; printf '}\n'
+}
+
+doctor_print_human() {
+  local next_action="$1"
+  local id status detail code severity blocking remediation_type can_resume
+  echo "Zimaflow doctor"
+  echo "Host: $DOCTOR_HOST"
+  echo "Overall status: $DOCTOR_OVERALL_STATUS"
+  echo "Checks:"
+  while IFS='|' read -r id status detail; do
+    [ -n "$id" ] || continue
+    echo "- $id: $status ($detail)"
+  done <<EOF
+$DOCTOR_CHECKS
+EOF
+  if [ -n "$DOCTOR_GAPS" ]; then
+    echo "Capability gaps:"
+    while IFS='|' read -r code severity blocking remediation_type can_resume; do
+      [ -n "$code" ] || continue
+      echo "- $code: $severity, blocking=$blocking, remediation=$remediation_type, auto_resume=$can_resume"
+    done <<EOF
+$DOCTOR_GAPS
+EOF
+  else
+    echo "Capability gaps: none"
+  fi
+  echo "Resume intent: ${DOCTOR_INTENT:-none}"
+  echo "Next action: $next_action"
+}
+
+run_doctor() {
+  local host="${1:-}"
+  shift || true
+  if [ -z "$host" ]; then echo "Missing host for doctor" >&2; return 2; fi
+
+  local output_mode="human" project="$(pwd)" capability="zimaflow.start"
+  local cli_path="${BASH_SOURCE[0]}" cli_version="$VERSION" protocol_version="1"
+  local runtime_manifest="" permission_status="granted"
+  DOCTOR_INTENT=""
+  DOCTOR_DISPATCH_CONTEXT=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json) output_mode="json"; shift ;;
+      --project|--capability|--intent|--dispatch-context|--cli-path|--cli-version|--protocol-version|--runtime-manifest|--permission-status)
+        [ "$#" -ge 2 ] || { echo "Missing value for doctor option: $1" >&2; return 2; }
+        case "$1" in
+          --project) project="$2" ;;
+          --capability) capability="$2" ;;
+          --intent) DOCTOR_INTENT="$2" ;;
+          --dispatch-context) DOCTOR_DISPATCH_CONTEXT="$2" ;;
+          --cli-path) cli_path="$2" ;;
+          --cli-version) cli_version="$2" ;;
+          --protocol-version) protocol_version="$2" ;;
+          --runtime-manifest) runtime_manifest="$2" ;;
+          --permission-status) permission_status="$2" ;;
+        esac
+        shift 2
+        ;;
+      *) echo "Unknown doctor option: $1" >&2; return 2 ;;
+    esac
+  done
+  case "$permission_status" in granted|denied) ;; *) echo "Invalid permission status: $permission_status" >&2; return 2 ;; esac
+
+  local zimaflow_home profile_file capability_file
+  zimaflow_home="$(find_zimaflow_home)"
+  profile_file="$zimaflow_home/references/host-capabilities.yaml"
+  capability_file="$zimaflow_home/references/doctor-capabilities.yaml"
+  DOCTOR_HOST="$host"
+  DOCTOR_CHECKS=""
+  DOCTOR_GAPS=""
+  DOCTOR_AUTO_RESUME="true"
+
+  if [ -x "$cli_path" ]; then doctor_add_check "cli" "passed" "cli_present"; else doctor_add_check "cli" "failed" "cli_missing"; doctor_add_gap "cli_missing"; fi
+  if [ "$cli_version" = "$VERSION" ]; then doctor_add_check "cli_version" "passed" "cli_version_compatible"; else doctor_add_check "cli_version" "failed" "cli_version_incompatible"; doctor_add_gap "cli_version_incompatible"; fi
+  if [ "$protocol_version" = "1" ]; then doctor_add_check "contract" "passed" "protocol_compatible"; else doctor_add_check "contract" "failed" "contract_incompatible"; doctor_add_gap "contract_incompatible"; fi
+  local project_context="" p_schema="" p_name="" p_code_root="" p_docs_root="" p_config="" p_projects_file="" p_docs_source="" p_initialized="false"
+  project_context="$(resolve_project_context "$project" 2>/dev/null || true)"
+  if [ -n "$project_context" ]; then
+    IFS=$'\t' read -r p_schema p_name p_code_root p_docs_root p_config p_projects_file p_docs_source p_initialized <<EOF
+$project_context
+EOF
+  fi
+  if [ "$p_initialized" = "true" ] && [ -f "$project/openspec/config.yaml" ]; then
+    doctor_add_check "project" "passed" "project_initialized"
+  else
+    doctor_add_check "project" "failed" "project_not_initialized"
+    doctor_add_gap "project_not_initialized"
+  fi
+
+  local profile_schema support_tier profile_core
+  profile_schema="$(yaml_top_value "$profile_file" "schema_version")"
+  support_tier="$(yaml_nested_value "$profile_file" "$host" "support_tier")"
+  profile_core="$(yaml_nested_value "$profile_file" "core" "logical_skill_ids")"
+  if [ "$profile_schema" = "1" ] && [ "$profile_core" = "true" ] && [ -n "$support_tier" ]; then doctor_add_check "host_profile" "passed" "host_profile_resolved"; else doctor_add_check "host_profile" "failed" "host_profile_missing"; doctor_add_gap "host_profile_missing"; fi
+
+  local capability_schema capability_protocol capabilities
+  capability_schema="$(yaml_top_value "$capability_file" "schema_version")"
+  capability_protocol="$(yaml_top_value "$capability_file" "protocol_version")"
+  capabilities="$(yaml_top_value "$capability_file" "logical_capabilities")"
+  if [ "$capability_schema" != "1" ] || [ "$capability_protocol" != "1" ]; then
+    doctor_add_check "capability" "failed" "contract_incompatible"
+    doctor_add_gap "contract_incompatible"
+  elif doctor_csv_contains "$capabilities" "$capability"; then
+    doctor_add_check "capability" "passed" "capability_resolved"
+  else
+    doctor_add_check "capability" "failed" "capability_unavailable"
+    doctor_add_gap "capability_unavailable"
+  fi
+
+  if [ "$permission_status" = "granted" ]; then doctor_add_check "permission" "passed" "permission_granted"; else doctor_add_check "permission" "failed" "permission_denied"; doctor_add_gap "permission_denied"; fi
+  if [ -z "$runtime_manifest" ]; then
+    doctor_add_check "runtime" "not_requested" "runtime_not_checked"
+  elif [ ! -f "$runtime_manifest" ]; then
+    doctor_add_check "runtime" "failed" "runtime_missing"
+    doctor_add_gap "runtime_missing"
+  else
+    local runtime_schema runtime_protocol runtime_fingerprint profile_fingerprint
+    runtime_schema="$(yaml_top_value "$runtime_manifest" "schema_version")"
+    runtime_protocol="$(yaml_top_value "$runtime_manifest" "doctor_contract_schema_version")"
+    runtime_fingerprint="$(yaml_top_value "$runtime_manifest" "source_fingerprint")"
+    profile_fingerprint="$(hash_file "$profile_file" 2>/dev/null || true)"
+    if [ "$runtime_schema" != "1" ] || [ "$runtime_protocol" != "1" ]; then
+      doctor_add_check "runtime" "failed" "contract_incompatible"
+      doctor_add_gap "contract_incompatible"
+    elif [ -z "$profile_fingerprint" ] || [ "$runtime_fingerprint" != "$profile_fingerprint" ]; then
+      doctor_add_check "runtime" "failed" "runtime_drift"
+      doctor_add_gap "runtime_drift"
+    else
+      doctor_add_check "runtime" "passed" "runtime_in_sync"
+    fi
+  fi
+
+  if [ -n "$DOCTOR_GAPS" ]; then DOCTOR_OVERALL_STATUS="blocked"; else DOCTOR_OVERALL_STATUS="ready"; fi
+  local next_action
+  next_action="$(doctor_next_action)"
+  if [ "$output_mode" = "json" ]; then doctor_print_json "$next_action"; else doctor_print_human "$next_action"; fi
+}
+
+find_context_index() {
+  local dir
+  dir="$(pwd)"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.zimaflow/context-index.yaml" ]; then
+      printf '%s/.zimaflow/context-index.yaml' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+}
+
+path_is_absolute() {
+  case "$1" in
+    /*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_context_path() {
+  local docs_dir="$1"
+  local path="$2"
+  if [ -z "$path" ]; then
+    return 0
+  fi
+  if path_is_absolute "$path"; then
+    printf '%s' "$path"
+  else
+    printf '%s/%s' "$docs_dir" "$path"
+  fi
+}
+
+state_files() {
+  local root="$1"
+  local changes_dir="$root/openspec/changes"
+  if [ -d "$changes_dir" ]; then
+    find "$changes_dir" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null | sort
+  fi
+}
+
+state_change_from_path() {
+  local root="$1"
+  local file="$2"
+  local changes_dir="$root/openspec/changes"
+  local rel="${file#"$changes_dir"/}"
+  printf '%s' "${rel%%/*}"
+}
+
+state_record() {
+  local root="$1"
+  local file="$2"
+  local fallback_change
+  fallback_change="$(state_change_from_path "$root" "$file")"
+
+  local change_id phase mode archive_status
+  change_id="$(yaml_top_value "$file" "change_id")"
+  phase="$(yaml_top_value "$file" "phase")"
+  mode="$(yaml_top_value "$file" "mode")"
+  archive_status="$(yaml_nested_value "$file" "archive" "status")"
+
+  [ -n "$change_id" ] || change_id="$fallback_change"
+  [ -n "$phase" ] || phase="unknown"
+  [ -n "$mode" ] || mode="unknown"
+  [ -n "$archive_status" ] || archive_status="unknown"
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$change_id" "$phase" "$mode" "$archive_status" "$file"
+}
+
+state_path_for_change() {
+  local root="$1"
+  local change="$2"
+  printf '%s/openspec/changes/%s/.zimaflow-state.yaml' "$root" "$change"
+}
+
+validate_change_id() {
+  local change="$1"
+  if [ -z "$change" ] || printf '%s' "$change" | grep -Eq '(^\.)|(/)|(^$)'; then
+    echo "Invalid change id: $change" >&2
+    return 2
+  fi
+}
+
+now_iso() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+today_ymd() {
+  date '+%Y-%m-%d'
+}
+
+cutoff_ymd() {
+  local days="$1"
+  if date -v-"$days"d '+%Y-%m-%d' >/dev/null 2>&1; then
+    date -v-"$days"d '+%Y-%m-%d'
+  else
+    date -d "$days days ago" '+%Y-%m-%d'
+  fi
+}
+
+now_epoch() {
+  date '+%s'
+}
+
+# Extract the YYYY-MM-DD date part from an ISO-like timestamp.
+ts_to_ymd() {
+  printf '%s' "$1" | sed -n 's/^\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\).*/\1/p'
+}
+
+# Convert a YYYY-MM-DD date to epoch seconds (BSD/macOS then GNU fallback).
+ymd_to_epoch() {
+  local ymd="$1"
+  [ -n "$ymd" ] || return 1
+  if date -j -f "%Y-%m-%d" "$ymd" '+%s' >/dev/null 2>&1; then
+    date -j -f "%Y-%m-%d" "$ymd" '+%s'
+  else
+    date -d "$ymd" '+%s' 2>/dev/null
+  fi
+}
+
+# File mtime as epoch seconds (GNU stat then BSD stat fallback).
+file_mtime_epoch() {
+  local f="$1"
+  [ -e "$f" ] || return 1
+  stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null
+}
+
+# Whole days between an epoch value and now (can be 0 or negative on skew).
+days_since_epoch() {
+  local then_epoch="$1"
+  [ -n "$then_epoch" ] || return 1
+  local now
+  now="$(now_epoch)"
+  echo $(( (now - then_epoch) / 86400 ))
+}
+
+id_date_ymd() {
+  local id="$1"
+  local raw
+  raw="$(printf '%s' "$id" | sed -n 's/^kf-\([0-9]\{8\}\).*/\1/p')"
+  if [ -n "$raw" ]; then
+    printf '%s-%s-%s' "${raw%????}" "$(printf '%s' "$raw" | cut -c5-6)" "$(printf '%s' "$raw" | cut -c7-8)"
+  fi
+}
+
+find_knowledge_root() {
+  if [ -f "references/lessons-common.md" ]; then
+    pwd
+    return 0
+  fi
+  find_git_root
+}
+
+state_load_or_defaults() {
+  local file="$1"
+  local change="$2"
+
+  STATE_CHANGE_ID="$change"
+  STATE_PHASE="contract_confirmed"
+  STATE_MODE="full"
+  STATE_CONTRACT_PATH=""
+  STATE_CONTRACT_STATUS="confirmed"
+  STATE_CONTRACT_CONFIRMED_AT=""
+  STATE_DECISION_PATH=""
+  STATE_DECISION_STATUS=""
+  STATE_PROTOTYPE_ENABLED="false"
+  STATE_PROTOTYPE_PATH=""
+  STATE_REVIEW_NOTES_PATH=""
+  STATE_PROTOTYPE_STATUS="not_applicable"
+  STATE_CHANGE_PATH="openspec/changes/$change"
+  STATE_PROPOSAL_PATH="openspec/changes/$change/proposal.md"
+  STATE_DESIGN_PATH="openspec/changes/$change/design.md"
+  STATE_TASKS_PATH="openspec/changes/$change/tasks.md"
+  STATE_SPEC_REVIEW_CONFIRMED="false"
+  STATE_SPEC_REVIEW_CONFIRMED_AT=""
+  STATE_ISOLATION=""
+  STATE_BRANCH=""
+  STATE_WORKTREE_PATH=""
+  STATE_STARTED_AT=""
+  STATE_COMPLETED_AT=""
+  STATE_OPSX_VERIFY="not_run"
+  STATE_FULL_TESTS="not_run"
+  STATE_LAST_COMMAND=""
+  STATE_LAST_RESULT=""
+  STATE_EVIDENCE_PATH=""
+  STATE_BLOCKED_REASON=""
+  STATE_VERIFIED_AT=""
+  STATE_ARCHIVE_STATUS="not_archived"
+  STATE_ARCHIVED_AT=""
+  STATE_DOCS_SYNCED="false"
+  STATE_HANDOVER_PATH=""
+  STATE_HANDOVER_UPDATED_AT=""
+  STATE_HASH_CONTRACT=""
+  STATE_HASH_DECISION=""
+  STATE_HASH_PROPOSAL=""
+  STATE_HASH_DESIGN=""
+  STATE_HASH_TASKS=""
+  STATE_EXECUTION_INPUT_PATH=""
+  STATE_EXECUTION_INPUT_STATUS="not_applicable"
+  STATE_EXECUTION_INPUT_GENERATED_AT=""
+  STATE_EXECUTION_INPUT_CONFIRMED_AT=""
+
+  if [ -f "$file" ]; then
+    STATE_CHANGE_ID="$(yaml_top_value "$file" "change_id")"
+    [ -n "$STATE_CHANGE_ID" ] || STATE_CHANGE_ID="$change"
+    STATE_PHASE="$(yaml_top_value "$file" "phase")"
+    [ -n "$STATE_PHASE" ] || STATE_PHASE="unknown"
+    STATE_MODE="$(yaml_top_value "$file" "mode")"
+    [ -n "$STATE_MODE" ] || STATE_MODE="unknown"
+    STATE_CONTRACT_PATH="$(yaml_nested_value "$file" "requirement_contract" "path")"
+    STATE_CONTRACT_STATUS="$(yaml_nested_value "$file" "requirement_contract" "status")"
+    STATE_CONTRACT_CONFIRMED_AT="$(yaml_nested_value "$file" "requirement_contract" "confirmed_at")"
+    STATE_DECISION_PATH="$(yaml_nested_value "$file" "decision" "path")"
+    STATE_DECISION_STATUS="$(yaml_nested_value "$file" "decision" "status")"
+    STATE_PROTOTYPE_ENABLED="$(yaml_nested_value "$file" "prototype" "enabled")"
+    STATE_PROTOTYPE_PATH="$(yaml_nested_value "$file" "prototype" "prototype_path")"
+    STATE_REVIEW_NOTES_PATH="$(yaml_nested_value "$file" "prototype" "review_notes_path")"
+    STATE_PROTOTYPE_STATUS="$(yaml_nested_value "$file" "prototype" "status")"
+    STATE_CHANGE_PATH="$(yaml_nested_value "$file" "openspec" "change_path")"
+    STATE_PROPOSAL_PATH="$(yaml_nested_value "$file" "openspec" "proposal_path")"
+    STATE_DESIGN_PATH="$(yaml_nested_value "$file" "openspec" "design_path")"
+    STATE_TASKS_PATH="$(yaml_nested_value "$file" "openspec" "tasks_path")"
+    STATE_SPEC_REVIEW_CONFIRMED="$(yaml_nested_value "$file" "openspec" "spec_review_confirmed")"
+    STATE_SPEC_REVIEW_CONFIRMED_AT="$(yaml_nested_value "$file" "openspec" "spec_review_confirmed_at")"
+    STATE_ISOLATION="$(yaml_nested_value "$file" "implementation" "isolation")"
+    STATE_BRANCH="$(yaml_nested_value "$file" "implementation" "branch")"
+    STATE_WORKTREE_PATH="$(yaml_nested_value "$file" "implementation" "worktree_path")"
+    STATE_STARTED_AT="$(yaml_nested_value "$file" "implementation" "started_at")"
+    STATE_COMPLETED_AT="$(yaml_nested_value "$file" "implementation" "completed_at")"
+    STATE_OPSX_VERIFY="$(yaml_nested_value "$file" "verification" "opsx_verify")"
+    STATE_FULL_TESTS="$(yaml_nested_value "$file" "verification" "full_tests")"
+    STATE_LAST_COMMAND="$(yaml_nested_value "$file" "verification" "last_command")"
+    STATE_LAST_RESULT="$(yaml_nested_value "$file" "verification" "last_result")"
+    STATE_EVIDENCE_PATH="$(yaml_nested_value "$file" "verification" "evidence_path")"
+    STATE_BLOCKED_REASON="$(yaml_nested_value "$file" "verification" "blocked_reason")"
+    STATE_VERIFIED_AT="$(yaml_nested_value "$file" "verification" "verified_at")"
+    STATE_ARCHIVE_STATUS="$(yaml_nested_value "$file" "archive" "status")"
+    STATE_ARCHIVED_AT="$(yaml_nested_value "$file" "archive" "archived_at")"
+    STATE_DOCS_SYNCED="$(yaml_nested_value "$file" "archive" "docs_synced")"
+    STATE_HANDOVER_PATH="$(yaml_nested_value "$file" "handover" "latest_path")"
+    STATE_HANDOVER_UPDATED_AT="$(yaml_nested_value "$file" "handover" "updated_at")"
+    STATE_HASH_CONTRACT="$(yaml_nested_value "$file" "artifact_hashes" "contract")"
+    STATE_HASH_DECISION="$(yaml_nested_value "$file" "artifact_hashes" "decision")"
+    STATE_HASH_PROPOSAL="$(yaml_nested_value "$file" "artifact_hashes" "proposal")"
+    STATE_HASH_DESIGN="$(yaml_nested_value "$file" "artifact_hashes" "design")"
+    STATE_HASH_TASKS="$(yaml_nested_value "$file" "artifact_hashes" "tasks")"
+    STATE_EXECUTION_INPUT_PATH="$(yaml_nested_value "$file" "execution_input" "path")"
+    STATE_EXECUTION_INPUT_STATUS="$(yaml_nested_value "$file" "execution_input" "status")"
+    STATE_EXECUTION_INPUT_GENERATED_AT="$(yaml_nested_value "$file" "execution_input" "generated_at")"
+    STATE_EXECUTION_INPUT_CONFIRMED_AT="$(yaml_nested_value "$file" "execution_input" "confirmed_at")"
+  fi
+
+  [ -n "$STATE_CONTRACT_STATUS" ] || STATE_CONTRACT_STATUS="confirmed"
+  [ -n "$STATE_DECISION_STATUS" ] || STATE_DECISION_STATUS="confirmed"
+  [ -n "$STATE_PROTOTYPE_ENABLED" ] || STATE_PROTOTYPE_ENABLED="false"
+  [ -n "$STATE_PROTOTYPE_STATUS" ] || STATE_PROTOTYPE_STATUS="not_applicable"
+  [ -n "$STATE_CHANGE_PATH" ] || STATE_CHANGE_PATH="openspec/changes/$change"
+  [ -n "$STATE_PROPOSAL_PATH" ] || STATE_PROPOSAL_PATH="openspec/changes/$change/proposal.md"
+  [ -n "$STATE_DESIGN_PATH" ] || STATE_DESIGN_PATH="openspec/changes/$change/design.md"
+  [ -n "$STATE_TASKS_PATH" ] || STATE_TASKS_PATH="openspec/changes/$change/tasks.md"
+  [ -n "$STATE_SPEC_REVIEW_CONFIRMED" ] || STATE_SPEC_REVIEW_CONFIRMED="false"
+  [ -n "$STATE_OPSX_VERIFY" ] || STATE_OPSX_VERIFY="not_run"
+  [ -n "$STATE_FULL_TESTS" ] || STATE_FULL_TESTS="not_run"
+  [ -n "$STATE_ARCHIVE_STATUS" ] || STATE_ARCHIVE_STATUS="not_archived"
+  [ -n "$STATE_DOCS_SYNCED" ] || STATE_DOCS_SYNCED="false"
+  [ -n "$STATE_EXECUTION_INPUT_STATUS" ] || STATE_EXECUTION_INPUT_STATUS="not_applicable"
+}
+
+state_write_file() {
+  local file="$1"
+  local updated_at
+  updated_at="$(now_iso)"
+
+  mkdir -p "$(dirname "$file")"
+  {
+    printf 'schema_version: 1\n'
+    printf 'change_id: %s\n' "$STATE_CHANGE_ID"
+    printf 'phase: %s\n' "$STATE_PHASE"
+    printf 'mode: %s\n' "$STATE_MODE"
+    printf '\n'
+    printf 'requirement_contract:\n'
+    printf '  path: %s\n' "$STATE_CONTRACT_PATH"
+    printf '  status: %s\n' "$STATE_CONTRACT_STATUS"
+    printf '  confirmed_at: %s\n' "$STATE_CONTRACT_CONFIRMED_AT"
+    printf '\n'
+    printf 'decision:\n'
+    printf '  path: %s\n' "$STATE_DECISION_PATH"
+    printf '  status: %s\n' "$STATE_DECISION_STATUS"
+    printf '\n'
+    printf 'prototype:\n'
+    printf '  enabled: %s\n' "$STATE_PROTOTYPE_ENABLED"
+    printf '  prototype_path: %s\n' "$STATE_PROTOTYPE_PATH"
+    printf '  review_notes_path: %s\n' "$STATE_REVIEW_NOTES_PATH"
+    printf '  status: %s\n' "$STATE_PROTOTYPE_STATUS"
+    printf '\n'
+    printf 'openspec:\n'
+    printf '  change_path: %s\n' "$STATE_CHANGE_PATH"
+    printf '  proposal_path: %s\n' "$STATE_PROPOSAL_PATH"
+    printf '  design_path: %s\n' "$STATE_DESIGN_PATH"
+    printf '  tasks_path: %s\n' "$STATE_TASKS_PATH"
+    printf '  spec_review_confirmed: %s\n' "$STATE_SPEC_REVIEW_CONFIRMED"
+    printf '  spec_review_confirmed_at: %s\n' "$STATE_SPEC_REVIEW_CONFIRMED_AT"
+    printf '\n'
+    printf 'implementation:\n'
+    printf '  isolation: %s\n' "$STATE_ISOLATION"
+    printf '  branch: %s\n' "$STATE_BRANCH"
+    printf '  worktree_path: %s\n' "$STATE_WORKTREE_PATH"
+    printf '  started_at: %s\n' "$STATE_STARTED_AT"
+    printf '  completed_at: %s\n' "$STATE_COMPLETED_AT"
+    printf '\n'
+    printf 'verification:\n'
+    printf '  opsx_verify: %s\n' "$STATE_OPSX_VERIFY"
+    printf '  full_tests: %s\n' "$STATE_FULL_TESTS"
+    printf '  last_command: %s\n' "$STATE_LAST_COMMAND"
+    printf '  last_result: %s\n' "$STATE_LAST_RESULT"
+    printf '  evidence_path: %s\n' "$STATE_EVIDENCE_PATH"
+    printf '  blocked_reason: %s\n' "$STATE_BLOCKED_REASON"
+    printf '  verified_at: %s\n' "$STATE_VERIFIED_AT"
+    printf '\n'
+    printf 'archive:\n'
+    printf '  status: %s\n' "$STATE_ARCHIVE_STATUS"
+    printf '  archived_at: %s\n' "$STATE_ARCHIVED_AT"
+    printf '  docs_synced: %s\n' "$STATE_DOCS_SYNCED"
+    printf '\n'
+    printf 'handover:\n'
+    printf '  latest_path: %s\n' "$STATE_HANDOVER_PATH"
+    printf '  updated_at: %s\n' "$STATE_HANDOVER_UPDATED_AT"
+    printf '\n'
+    printf 'artifact_hashes:\n'
+    printf '  contract: %s\n' "$STATE_HASH_CONTRACT"
+    printf '  decision: %s\n' "$STATE_HASH_DECISION"
+    printf '  proposal: %s\n' "$STATE_HASH_PROPOSAL"
+    printf '  design: %s\n' "$STATE_HASH_DESIGN"
+    printf '  tasks: %s\n' "$STATE_HASH_TASKS"
+    printf '\n'
+    printf 'execution_input:\n'
+    printf '  path: %s\n' "$STATE_EXECUTION_INPUT_PATH"
+    printf '  status: %s\n' "$STATE_EXECUTION_INPUT_STATUS"
+    printf '  generated_at: %s\n' "$STATE_EXECUTION_INPUT_GENERATED_AT"
+    printf '  confirmed_at: %s\n' "$STATE_EXECUTION_INPUT_CONFIRMED_AT"
+    printf '\n'
+    printf 'updated_at: %s\n' "$updated_at"
+    printf 'updated_by: zimaflow\n'
+  } > "$file"
+}
+
+state_records() {
+  local root="$1"
+  local file
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    state_record "$root" "$file"
+  done <<EOF
+$(state_files "$root")
+EOF
+}
+
+state_active_count() {
+  awk -F '\t' 'NF && $2 != "closed" { count++ } END { print count + 0 }'
+}
+
+print_state_json() {
+  local repository="$1"
+  local records="$2"
+  local active_count="$3"
+  local first="yes"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"active_count":%s,' "$active_count"
+  printf '"states":['
+  if [ -n "$records" ]; then
+    while IFS="$(printf '\t')" read -r change_id phase mode archive_status path; do
+      [ -n "$change_id" ] || continue
+      if [ "$first" = "no" ]; then
+        printf ','
+      fi
+      printf '{'
+      printf '"change_id":'; json_string "$change_id"; printf ','
+      printf '"phase":'; json_string "$phase"; printf ','
+      printf '"mode":'; json_string "$mode"; printf ','
+      printf '"archive_status":'; json_string "$archive_status"; printf ','
+      printf '"path":'; json_string "$path"
+      printf '}'
+      first="no"
+    done <<EOF
+$records
+EOF
+  fi
+  printf ']}'
+  printf '\n'
+}
+
+lesson_entries() {
+  local lessons_file="$1"
+  awk '
+    /^- \*\*ID\*\*：/ {
+      id = $0
+      sub(/^- \*\*ID\*\*：/, "", id)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", id)
+      current_id = id
+      level = ""
+    }
+    current_id != "" && /^- \*\*级别\*\*：/ {
+      level = $0
+      sub(/^- \*\*级别\*\*：/, "", level)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", level)
+      print current_id "\t" level
+      current_id = ""
+    }
+  ' "$lessons_file" 2>/dev/null
+}
+
+ledger_recent_activity() {
+  local ledger_file="$1"
+  local cutoff="$2"
+  [ -f "$ledger_file" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in
+      *'"event_type":"cited"'*|*'"event_type":"applied"'*)
+        local id type ts
+        id="$(printf '%s' "$line" | sed -n 's/.*"knowledge_id":"\([^"]*\)".*/\1/p')"
+        type="$(printf '%s' "$line" | sed -n 's/.*"event_type":"\([^"]*\)".*/\1/p')"
+        ts="$(printf '%s' "$line" | sed -n 's/.*"timestamp":"\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\).*/\1/p')"
+        if [ -n "$id" ] && [ -n "$ts" ] && [ "$ts" \> "$cutoff" -o "$ts" = "$cutoff" ]; then
+          printf '%s\t%s\t%s\n' "$id" "$type" "$ts"
+        fi
+        ;;
+    esac
+  done < "$ledger_file"
+}
+
+ledger_last_activity() {
+  local ledger_file="$1"
+  [ -f "$ledger_file" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in
+      *'"event_type":"cited"'*|*'"event_type":"applied"'*)
+        local id type ts
+        id="$(printf '%s' "$line" | sed -n 's/.*"knowledge_id":"\([^"]*\)".*/\1/p')"
+        type="$(printf '%s' "$line" | sed -n 's/.*"event_type":"\([^"]*\)".*/\1/p')"
+        ts="$(printf '%s' "$line" | sed -n 's/.*"timestamp":"\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\).*/\1/p')"
+        if [ -n "$id" ] && [ -n "$ts" ]; then
+          printf '%s\t%s\t%s\n' "$id" "$type" "$ts"
+        fi
+        ;;
+    esac
+  done < "$ledger_file" | sort -t "$(printf '\t')" -k1,1 -k3,3 | awk -F '\t' '{ last[$1] = $0 } END { for (id in last) print last[id] }'
+}
+
+merge_knowledge_ledgers() {
+  local global_ledger="$1"
+  local historical_ledger="$2"
+  local seen_file
+  seen_file="$(mktemp)"
+
+  local ledger line event_id
+  for ledger in "$global_ledger" "$historical_ledger"; do
+    [ -f "$ledger" ] || continue
+    while IFS= read -r line; do
+      event_id="$(printf '%s' "$line" | sed -n 's/.*"event_id":"\([^"]*\)".*/\1/p')"
+      [ -n "$event_id" ] || continue
+      if grep -Fqx "$event_id" "$seen_file"; then
+        continue
+      fi
+      printf '%s\n' "$event_id" >> "$seen_file"
+      printf '%s\n' "$line"
+    done < "$ledger"
+  done
+
+  rm -f "$seen_file"
+}
+
+# Public runtimes never ship a mutable or private lesson library. The user's
+# data home owns the writable cross-project library; a source-root file is only
+# a read-only compatibility input. User IDs win on collision, then legacy-only
+# IDs are retained so existing private users do not lose historical context.
+merged_lesson_entries() {
+  local user_lessons="$1" legacy_lessons="$2" entries id level seen
+  seen="$(mktemp)" || return 2
+  for entries in "$( [ -f "$user_lessons" ] && lesson_entries "$user_lessons" || true )" "$( [ -f "$legacy_lessons" ] && lesson_entries "$legacy_lessons" || true )"; do
+    while IFS="$(printf '\t')" read -r id level; do
+      [ -n "$id" ] || continue
+      grep -Fqx "$id" "$seen" && continue
+      printf '%s\n' "$id" >> "$seen"
+      printf '%s\t%s\n' "$id" "$level"
+    done <<EOF
+$entries
+EOF
+  done
+  rm -f "$seen"
+}
+
+stale_candidates() {
+  local root="$1"
+  local days="$2"
+  local include_rules="$3"
+  local cutoff="$4"
+  local global_ledger="$5"
+  local user_lessons="$6"
+  local lessons_file="$root/references/lessons-common.md"
+  local historical_ledger="$root/references/knowledge-usage-ledger.jsonl"
+
+  local merged_file recent_file last_file
+  merged_file="$(mktemp)"
+  recent_file="$(mktemp)"
+  last_file="$(mktemp)"
+  merge_knowledge_ledgers "$global_ledger" "$historical_ledger" > "$merged_file"
+  ledger_recent_activity "$merged_file" "$cutoff" > "$recent_file"
+  ledger_last_activity "$merged_file" > "$last_file"
+
+  merged_lesson_entries "$user_lessons" "$lessons_file" | while IFS="$(printf '\t')" read -r knowledge_id level; do
+    [ -n "$knowledge_id" ] || continue
+    if [ "$include_rules" != "yes" ] && [ "$level" = "rule" ]; then
+      continue
+    fi
+
+    local created_at
+    created_at="$(id_date_ymd "$knowledge_id")"
+    if [ -n "$created_at" ] && [ "$created_at" \> "$cutoff" ]; then
+      continue
+    fi
+
+    if grep -Fq "${knowledge_id}	" "$recent_file"; then
+      continue
+    fi
+
+    local last_line last_type last_seen
+    last_line="$(grep -F "${knowledge_id}	" "$last_file" | sort -t "$(printf '\t')" -k3,3 | tail -1 || true)"
+    if [ -n "$last_line" ]; then
+      last_type="$(printf '%s' "$last_line" | cut -f2)"
+      last_seen="$(printf '%s' "$last_line" | cut -f3)"
+    else
+      last_type=""
+      last_seen=""
+    fi
+
+    printf '%s\t%s\t%s\t%s\t%s\n' "$knowledge_id" "$level" "$created_at" "$last_type" "$last_seen"
+  done
+
+  rm -f "$merged_file" "$recent_file" "$last_file"
+}
+
+print_stale_json() {
+  local repository="$1"
+  local days="$2"
+  local cutoff="$3"
+  local candidates="$4"
+  local candidate_count="$5"
+  local first="yes"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"days":%s,' "$days"
+  printf '"cutoff":'; json_string "$cutoff"; printf ','
+  printf '"candidate_count":%s,' "$candidate_count"
+  printf '"candidates":['
+  if [ -n "$candidates" ]; then
+    while IFS="$(printf '\t')" read -r knowledge_id level created_at last_type last_seen; do
+      [ -n "$knowledge_id" ] || continue
+      if [ "$first" = "no" ]; then
+        printf ','
+      fi
+      printf '{'
+      printf '"knowledge_id":'; json_string "$knowledge_id"; printf ','
+      printf '"level":'; json_string "$level"; printf ','
+      printf '"created_at":'; json_string "$created_at"; printf ','
+      printf '"last_activity_type":'; json_string "$last_type"; printf ','
+      printf '"last_activity_at":'; json_string "$last_seen"
+      printf '}'
+      first="no"
+    done <<EOF
+$candidates
+EOF
+  fi
+  printf ']}\n'
+}
+
+resolve_artifact_path() {
+  local root="$1"
+  local path="$2"
+  local docs_root="${3:-}"
+  case "$path" in
+    "")
+      printf ''
+      ;;
+    repo://*|docs://*)
+      local namespace relative base resolved context
+      namespace="${path%%://*}"
+      relative="${path#*://}"
+      validate_safe_relative_path "$relative" || {
+        echo "Invalid logical artifact reference: $path" >&2
+        return 2
+      }
+      if [ "$namespace" = repo ]; then
+        base="$root"
+      else
+        if [ -z "$docs_root" ]; then
+          context="$(resolve_project_context "$root")" || return
+          local context_schema context_name context_root context_docs
+          IFS=$'\t' read -r context_schema context_name context_root context_docs _ <<EOF
+$context
+EOF
+          docs_root="$context_docs"
+        fi
+        base="$docs_root"
+      fi
+      base="$(canonical_path_for_write "$base")" || return 2
+      if [ -L "$base/$relative" ]; then
+        echo "Invalid logical artifact reference: $path" >&2
+        return 2
+      fi
+      if [ -e "$base/$relative" ]; then
+        local resolved_parent
+        resolved_parent="$(cd "$(dirname "$base/$relative")" 2>/dev/null && pwd -P)" || return 2
+        resolved="$resolved_parent/$(basename "$relative")"
+      else
+        resolved="$(canonical_path_for_write "$base/$relative")" || return 2
+      fi
+      case "$resolved" in
+        "$base"/*) printf '%s' "$resolved" ;;
+        *) echo "Invalid logical artifact reference: $path" >&2; return 2 ;;
+      esac
+      ;;
+    /*)
+      printf '%s' "$path"
+      ;;
+    *)
+      printf '%s/%s' "$root" "$path"
+      ;;
+  esac
+}
+
+hash_file() {
+  local file="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{ print $1 }'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{ print $1 }'
+  else
+    echo "No SHA256 command found: shasum or sha256sum required." >&2
+    return 2
+  fi
+}
+
+drift_artifact_row() {
+  local root="$1"
+  local artifact="$2"
+  local path="$3"
+  local stored_hash="$4"
+
+  local resolved_path current_hash status
+  resolved_path="$(resolve_artifact_path "$root" "$path")"
+  current_hash=""
+
+  if [ -z "$path" ]; then
+    status="not_configured"
+  elif [ ! -f "$resolved_path" ]; then
+    status="missing"
+  else
+    current_hash="$(hash_file "$resolved_path")" || return 2
+    if [ -z "$stored_hash" ]; then
+      status="untracked"
+    elif [ "$stored_hash" = "$current_hash" ]; then
+      status="ok"
+    else
+      status="drifted"
+    fi
+  fi
+
+  printf '%s|%s|%s|%s|%s\n' "$artifact" "$path" "$stored_hash" "$current_hash" "$status"
+}
+
+drift_records() {
+  local root="$1"
+  drift_artifact_row "$root" "contract" "$STATE_CONTRACT_PATH" "$STATE_HASH_CONTRACT"
+  drift_artifact_row "$root" "decision" "$STATE_DECISION_PATH" "$STATE_HASH_DECISION"
+  drift_artifact_row "$root" "proposal" "$STATE_PROPOSAL_PATH" "$STATE_HASH_PROPOSAL"
+  drift_artifact_row "$root" "design" "$STATE_DESIGN_PATH" "$STATE_HASH_DESIGN"
+  drift_artifact_row "$root" "tasks" "$STATE_TASKS_PATH" "$STATE_HASH_TASKS"
+}
+
+drift_count_records() {
+  awk -F '|' 'NF && ($5 == "drifted" || $5 == "missing") { count++ } END { print count + 0 }'
+}
+
+execution_input_status() {
+  local records="$1"
+  if [ -z "$STATE_EXECUTION_INPUT_PATH" ]; then
+    echo "not_applicable"
+  elif [ ! -f "$(resolve_artifact_path "$2" "$STATE_EXECUTION_INPUT_PATH")" ]; then
+    echo "missing"
+  elif printf '%s\n' "$records" | awk -F '|' 'NF && ($5 == "drifted" || $5 == "missing") { found=1 } END { exit !found }'; then
+    echo "stale"
+  else
+    echo "fresh"
+  fi
+}
+
+print_drift_json() {
+  local repository="$1"
+  local change_id="$2"
+  local written="$3"
+  local drift_count="$4"
+  local records="$5"
+  local first="yes"
+  local execution_status
+  execution_status="$(execution_input_status "$records" "$repository")"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"change_id":'; json_string "$change_id"; printf ','
+  printf '"written":%s,' "$written"
+  printf '"drift_count":%s,' "$drift_count"
+  printf '"execution_input":{"path":'; json_string "$STATE_EXECUTION_INPUT_PATH"; printf ',"status":'; json_string "$execution_status"; printf '},'
+  printf '"artifacts":['
+  if [ -n "$records" ]; then
+    while IFS="|" read -r artifact path stored_hash current_hash status; do
+      [ -n "$artifact" ] || continue
+      if [ "$first" = "no" ]; then
+        printf ','
+      fi
+      printf '{'
+      printf '"artifact":'; json_string "$artifact"; printf ','
+      printf '"path":'; json_string "$path"; printf ','
+      printf '"stored_hash":'; json_string "$stored_hash"; printf ','
+      printf '"current_hash":'; json_string "$current_hash"; printf ','
+      printf '"status":'; json_string "$status"
+      printf '}'
+      first="no"
+    done <<EOF
+$records
+EOF
+  fi
+  printf ']}\n'
+}
+
+run_execution_input() {
+  local change="${1:-}"
+  shift || true
+  validate_change_id "$change" || return 2
+  local write="false" format="human"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --write) write="true"; shift ;;
+      --json) format="json"; shift ;;
+      *) echo "Unknown execution-input option: $1" >&2; return 2 ;;
+    esac
+  done
+  [ "$write" = "true" ] || { echo "execution-input is read-only until --write is supplied" >&2; return 2; }
+  local root file
+  root="$(find_state_root)" || return 2
+  file="$(state_path_for_change "$root" "$change")"
+  [ -f "$file" ] || { echo "State file not found: $file" >&2; return 2; }
+  state_load_or_defaults "$file" "$change"
+  local required path
+  case "$STATE_MODE" in full|hotfix) ;; *) echo "execution-input applies only to full or hotfix changes" >&2; return 2;; esac
+  if [ "$STATE_MODE" = "full" ]; then
+    required="$(resolve_artifact_path "$root" "$STATE_DECISION_PATH")"
+    [ -f "$required" ] || { echo "Full changes require a Decision artifact: ${STATE_DECISION_PATH:-<missing>}" >&2; return 2; }
+  fi
+  for path in "$STATE_CONTRACT_PATH" "$STATE_PROPOSAL_PATH" "$STATE_DESIGN_PATH" "$STATE_TASKS_PATH"; do
+    required="$(resolve_artifact_path "$root" "$path")"
+    [ -f "$required" ] || { echo "Required artifact missing: $path" >&2; return 2; }
+  done
+  STATE_EXECUTION_INPUT_PATH="openspec/changes/$change/execution-input.md"
+  local snapshot
+  snapshot="$(resolve_artifact_path "$root" "$STATE_EXECUTION_INPUT_PATH")"
+  {
+    printf '# %s · Execution Input\n\n' "$change"
+    printf '> 派生物：仅供实现阶段阅读；需求、Decision 与 OpenSpec 工件仍是真源。\n\n'
+    printf '## 意图锁\n\n'
+    sed -n '/^## 意图锁/,/^## /p' "$(resolve_artifact_path "$root" "$STATE_CONTRACT_PATH")" | sed '$d' || true
+    printf '\n## 范围与约束\n\n'
+    sed -n '/^## 不做什么/,/^## /p' "$(resolve_artifact_path "$root" "$STATE_CONTRACT_PATH")" | sed '$d' || true
+    printf '\n## 来源工件\n\n'
+    printf -- '- Requirement: %s\n- Decision: %s\n- Proposal: %s\n- Design: %s\n- Tasks: %s\n' "$STATE_CONTRACT_PATH" "$STATE_DECISION_PATH" "$STATE_PROPOSAL_PATH" "$STATE_DESIGN_PATH" "$STATE_TASKS_PATH"
+  } > "$snapshot"
+  STATE_EXECUTION_INPUT_STATUS="fresh"
+  STATE_EXECUTION_INPUT_GENERATED_AT="$(now_iso)"
+  STATE_EXECUTION_INPUT_CONFIRMED_AT="$(now_iso)"
+  state_write_file "$file"
+  if [ "$format" = "json" ]; then
+    printf '{"change_id":'; json_string "$change"; printf ',"written":true,"path":'; json_string "$STATE_EXECUTION_INPUT_PATH"; printf ',"status":"fresh"}\n'
+  else
+    printf 'Execution input written: %s\n' "$snapshot"
+  fi
+}
+
+git_changed_files() {
+  local root="$1"
+  (
+    cd "$root" || exit 1
+    {
+      git status --porcelain=v1 | sed 's/^...//'
+      git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null
+    } | awk 'NF' | sort -u
+  )
+}
+
+archive_docs_sync_confirmed() {
+  local root="$1"
+  local changed_files="$2"
+  local rel state_file phase archive_status docs_synced
+  local found="no"
+
+  while IFS= read -r rel; do
+    case "$rel" in
+      openspec/changes/archive/*/.zimaflow-state.yaml)
+        state_file="$root/$rel"
+        [ -f "$state_file" ] || continue
+        found="yes"
+        phase="$(yaml_top_value "$state_file" "phase")"
+        archive_status="$(yaml_nested_value "$state_file" "archive" "status")"
+        docs_synced="$(yaml_nested_value "$state_file" "archive" "docs_synced")"
+        [ "$phase" = "closed" ] \
+          && [ "$archive_status" = "archived" ] \
+          && [ "$docs_synced" = "true" ] \
+          || return 1
+        ;;
+    esac
+  done <<EOF
+$changed_files
+EOF
+
+  [ "$found" = "yes" ]
+}
+
+has_match() {
+  local pattern="$1"
+  grep -E "$pattern" >/dev/null 2>&1
+}
+
+# Emit tab-separated new-line number and content for lines added to one known
+# path. Path discovery is deliberately separate and NUL-delimited, so Git path
+# quoting never becomes part of a user-facing hit.
+git_head_first_parent_base() {
+  local root="$1"
+  if git -C "$root" rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+    git -C "$root" rev-parse HEAD^1
+    return 0
+  fi
+  if git -C "$root" rev-parse --verify HEAD >/dev/null 2>&1; then
+    git -C "$root" hash-object -t tree /dev/null
+    return 0
+  fi
+  return 1
+}
+
+git_diff_added_lines_for_entry() {
+  local root="$1"
+  local source="$2"
+  local old_path="$3"
+  local new_path="$4"
+  local head_base=""
+  if [ "$source" = "head" ]; then
+    head_base="$(git_head_first_parent_base "$root")" || return 0
+  fi
+  case "$source" in
+    unstaged)
+      if [ -n "$old_path" ] && [ "$old_path" != "$new_path" ]; then
+        (cd "$root" && git diff --unified=0 --no-color --no-ext-diff -- "$old_path" "$new_path" 2>/dev/null)
+      else
+        (cd "$root" && git diff --unified=0 --no-color --no-ext-diff -- "$new_path" 2>/dev/null)
+      fi
+      ;;
+    staged)
+      if [ -n "$old_path" ] && [ "$old_path" != "$new_path" ]; then
+        (cd "$root" && git diff --cached --unified=0 --no-color --no-ext-diff -- "$old_path" "$new_path" 2>/dev/null)
+      else
+        (cd "$root" && git diff --cached --unified=0 --no-color --no-ext-diff -- "$new_path" 2>/dev/null)
+      fi
+      ;;
+    head)
+      if [ -n "$old_path" ] && [ "$old_path" != "$new_path" ]; then
+        (cd "$root" && git diff --unified=0 --no-color --no-ext-diff "$head_base" HEAD -- "$old_path" "$new_path" 2>/dev/null)
+      else
+        (cd "$root" && git diff --unified=0 --no-color --no-ext-diff "$head_base" HEAD -- "$new_path" 2>/dev/null)
+      fi
+      ;;
+    *)
+      return 2
+      ;;
+  esac | awk '
+    /^diff --git / {
+      in_hunk = 0
+      next
+    }
+    /^index / || /^--- / || /^\+\+\+ / { next }
+    /^@@ / {
+      hunk = $0
+      sub(/^.* \+/, "", hunk)
+      sub(/ .*/, "", hunk)
+      sub(/,.*/, "", hunk)
+      line = hunk + 0
+      in_hunk = 1
+      next
+    }
+    in_hunk && /^\+/ {
+      printf "%d\t%s\n", line, substr($0, 2)
+      line++
+      next
+    }
+    in_hunk && /^-/ { next }
+    in_hunk && /^\\/ { next }
+    in_hunk { line++ }
+  '
+}
+
+scan_secret_candidate_line() {
+  local file="$1"
+  local lineno="$2"
+  local content="$3"
+  local line_re="$4"
+  local placeholder_re="$5"
+  local path_exclude_re="$6"
+
+  printf '%s' "$file" | grep -qE "$path_exclude_re" && return 0
+  printf '%s\n' "$content" | grep -qiE "$placeholder_re" && return 0
+  printf '%s\n' "$content" | grep -qiE "$line_re" || return 0
+  if printf '%s' "$file" | grep -qE '(^|/)(test|tests|fixtures)(/|$)' \
+    && printf '%s\n' "$content" | grep -qF 'zimaflow: test-secret-fixture'; then
+    return 0
+  fi
+  printf '%s:%s\n' "$file" "$lineno"
+}
+
+git_changed_entries_for_source() {
+  local root="$1"
+  local source="$2"
+  local head_base=""
+  if [ "$source" = "head" ]; then
+    head_base="$(git_head_first_parent_base "$root")" || return 0
+  fi
+  cd "$root" || exit 1
+  case "$source" in
+    unstaged)
+      git diff --name-status --diff-filter=ACMR --find-renames -z
+      ;;
+    staged)
+      git diff --cached --name-status --diff-filter=ACMR --find-renames -z
+      ;;
+    head)
+      git diff --name-status --diff-filter=ACMR --find-renames -z \
+        "$head_base" HEAD
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+
+scan_secret_diff_source() {
+  local root="$1"
+  local source="$2"
+  local line_re="$3"
+  local placeholder_re="$4"
+  local path_exclude_re="$5"
+  local status old_path new_path lineno content
+
+  while IFS= read -r -d '' status; do
+    old_path=""
+    new_path=""
+    case "$status" in
+      R*|C*)
+        IFS= read -r -d '' old_path || return 1
+        IFS= read -r -d '' new_path || return 1
+        ;;
+      *)
+        IFS= read -r -d '' new_path || return 1
+        ;;
+    esac
+    git_diff_added_lines_for_entry "$root" "$source" "$old_path" "$new_path" \
+      | while IFS="$(printf '\t')" read -r lineno content; do
+          [ -n "$lineno" ] || continue
+          scan_secret_candidate_line "$new_path" "$lineno" "$content" \
+            "$line_re" "$placeholder_re" "$path_exclude_re"
+        done
+  done < <(git_changed_entries_for_source "$root" "$source")
+}
+
+scan_secret_untracked_files() {
+  local root="$1"
+  local line_re="$2"
+  local placeholder_re="$3"
+  local path_exclude_re="$4"
+  local file lineno content
+
+  while IFS= read -r -d '' file; do
+    [ -f "$root/$file" ] || continue
+    lineno=0
+    while IFS= read -r content || [ -n "$content" ]; do
+      lineno=$((lineno + 1))
+      scan_secret_candidate_line "$file" "$lineno" "$content" \
+        "$line_re" "$placeholder_re" "$path_exclude_re"
+    done < "$root/$file"
+  done < <(
+    cd "$root" || exit 1
+    git ls-files --others --exclude-standard -z
+  )
+}
+
+# scan_secrets: lightweight, report-only scan of newly added lines for obvious
+# secret assignments (api_key/token/secret/password/private_key ...).
+# Emits "path:line" hits only (never the secret value). Skips large/vendor dirs,
+# obvious placeholders/env-indirection, and explicitly marked fixtures in
+# test-owned paths. This does not block anything.
+scan_secrets() {
+  local root="$1"
+  local q="\"'\`"
+  local key_re='(api[_-]?key|secret|token|passwd|password|private[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token)'
+  local line_re="${key_re}[${q}]?[[:space:]]*[:=]+[[:space:]]*[${q}][^${q}]{8,}"
+  local placeholder_re='(process\.env|import\.meta\.env|os\.environ|getenv\(|\$\{|<[a-zA-Z/]|example|placeholder|changeme|your[_-]|dummy|redacted|sample|xxxxxxxx|\*\*\*\*)'
+  local path_exclude_re='(^|/)(\.git|node_modules|target|dist|build|vendor|\.next|coverage)/|\.(png|jpe?g|gif|pdf|lock|map)$|(\.min\.js)$|(\.example|\.sample)$|(^|/)\.env\.example$'
+
+  {
+    scan_secret_diff_source "$root" unstaged "$line_re" "$placeholder_re" "$path_exclude_re"
+    scan_secret_diff_source "$root" staged "$line_re" "$placeholder_re" "$path_exclude_re"
+    scan_secret_diff_source "$root" head "$line_re" "$placeholder_re" "$path_exclude_re"
+    scan_secret_untracked_files "$root" "$line_re" "$placeholder_re" "$path_exclude_re"
+  } | sort -u
+}
+
+print_status_line() {
+  local label="$1"
+  local status="$2"
+  local detail="$3"
+  printf '%-34s %s\n' "$label:" "$status"
+  if [ -n "$detail" ]; then
+    printf '  %s\n' "$detail"
+  fi
+}
+
+human_next_action() {
+  case "$1" in
+    can_close) echo "can close" ;;
+    need_docs_sync) echo "need docs sync" ;;
+    need_archive) echo "need archive" ;;
+    need_manual_confirmation) echo "need manual confirmation" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+print_close_json() {
+  local repository="$1"
+  local git_status="$2"
+  local dirty_count="$3"
+  local unarchived_changes="$4"
+  local archive_docs_sync_signal="$5"
+  local docs_sync_gap="$6"
+  local learn_candidate_scan="$7"
+  local active_state_count="$8"
+  local active_state_changes="$9"
+  local next_action="${10}"
+  local secrets_scan="${11}"
+  local secrets_hits="${12}"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"git_status":'; json_string "$git_status"; printf ','
+  printf '"dirty_count":%s,' "$dirty_count"
+  printf '"openspec_unarchived_changes":'; json_string_array "$unarchived_changes"; printf ','
+  printf '"archive_docs_sync_signal":'; json_string "$archive_docs_sync_signal"; printf ','
+  printf '"docs_sync_gap":'; json_string "$docs_sync_gap"; printf ','
+  printf '"learn_candidate_scan":'; json_string "$learn_candidate_scan"; printf ','
+  printf '"secrets_scan":'; json_string "$secrets_scan"; printf ','
+  printf '"secrets_hits":'; json_string_array "$secrets_hits"; printf ','
+  printf '"active_state_count":%s,' "$active_state_count"
+  printf '"active_state_changes":'; json_string_array "$active_state_changes"; printf ','
+  printf '"next_action":'; json_string "$next_action"
+  printf '}\n'
+}
+
+run_close() {
+  local format="${1:-human}"
+  local root
+  root="$(find_git_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      print_close_json "" "not_git_repo" 0 "" "not_checked" "not_checked" "not_checked" 0 "" "need_manual_confirmation" "not_checked" ""
+      return 2
+    fi
+    echo "zimaflow close"
+    echo
+    echo "Not inside a git repository."
+    echo "Next action: need manual confirmation"
+    return 2
+  fi
+
+  local dirty_count
+  dirty_count="$(cd "$root" && git status --porcelain=v1 | wc -l | tr -d ' ')"
+
+  local changed_files
+  changed_files="$(git_changed_files "$root")"
+
+  local changes_dir="$root/openspec/changes"
+  local unarchived_changes=""
+  if [ -d "$changes_dir" ]; then
+    unarchived_changes="$(
+      find "$changes_dir" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null \
+        | sed "s#^$changes_dir/##" \
+        | awk '$0 != "archive"' \
+        | sort
+    )"
+  fi
+
+  local state_root
+  if [ -d "openspec/changes" ]; then
+    state_root="$(pwd)"
+  else
+    state_root="$root"
+  fi
+
+  local state_records_value
+  state_records_value="$(state_records "$state_root")"
+
+  local active_state_count
+  active_state_count="$(printf '%s\n' "$state_records_value" | state_active_count)"
+
+  local active_state_changes=""
+  if [ -n "$state_records_value" ]; then
+    active_state_changes="$(
+      printf '%s\n' "$state_records_value" \
+        | awk -F '\t' 'NF && $2 != "closed" { print $1 }' \
+        | sort
+    )"
+  fi
+
+  local archive_signal="no"
+  if printf '%s\n' "$changed_files" | has_match '^openspec/specs/'; then
+    if archive_docs_sync_confirmed "$root" "$changed_files"; then
+      archive_signal="confirmed"
+    else
+      archive_signal="possible"
+    fi
+  else
+    archive_signal="none_obvious"
+  fi
+
+  local docs_signal="no"
+  if printf '%s\n' "$changed_files" | has_match '(^|/)(README|PROGRESS|CHANGELOG)\.md$|(^|/)docs/|(^|/)Decisions/|(^|/)design\.md$|(^|/)lessons.*\.md$'; then
+    docs_signal="yes"
+  fi
+
+  local code_signal="no"
+  if printf '%s\n' "$changed_files" | has_match '(^src/|^app/|^lib/|^server/|^client/|^packages/|^cmd/|^internal/|^pkg/|^bin/|\.([cm]?js|tsx?|py|go|rs|java|kt|swift|rb|php|cs|cpp|c|h|hpp|sh)$)'; then
+    code_signal="yes"
+  fi
+
+  local workflow_signal="no"
+  if printf '%s\n' "$changed_files" | has_match '(^|/)(SKILL\.md|AGENTS\.md|CLAUDE\.md)$|(^|/)(\.claude|\.codex|skills?|references)/'; then
+    workflow_signal="yes"
+  fi
+
+  local secrets_hits
+  secrets_hits="$(scan_secrets "$root" "$changed_files" | head -20)"
+  local secrets_scan="none_obvious"
+  if [ -n "$secrets_hits" ]; then
+    secrets_scan="suspected"
+  fi
+
+  local git_status="clean"
+  local docs_sync_gap="none_obvious"
+  local learn_candidate_scan="none_obvious"
+  local next_action="can_close"
+
+  if [ "$dirty_count" != "0" ]; then
+    git_status="dirty"
+    next_action="need_manual_confirmation"
+  fi
+
+  if [ -n "$unarchived_changes" ]; then
+    next_action="need_archive"
+  fi
+
+  if [ "$active_state_count" != "0" ]; then
+    if [ "$next_action" = "can_close" ]; then
+      next_action="need_manual_confirmation"
+    fi
+  fi
+
+  if [ "$archive_signal" = "possible" ] && [ "$next_action" = "can_close" ]; then
+    next_action="need_docs_sync"
+  fi
+
+  if [ "$code_signal" = "yes" ] && [ "$docs_signal" = "no" ]; then
+    docs_sync_gap="possible"
+    if [ "$next_action" = "can_close" ]; then
+      next_action="need_docs_sync"
+    fi
+  elif [ "$docs_signal" = "yes" ]; then
+    docs_sync_gap="docs_touched"
+  fi
+
+  if [ "$workflow_signal" = "yes" ]; then
+    learn_candidate_scan="recommended"
+    if [ "$next_action" = "can_close" ]; then
+      next_action="need_manual_confirmation"
+    fi
+  fi
+
+  # Suspected secrets take top priority: always require manual confirmation.
+  if [ "$secrets_scan" = "suspected" ]; then
+    next_action="need_manual_confirmation"
+  fi
+
+  if [ "$format" = "json" ]; then
+    print_close_json "$root" "$git_status" "$dirty_count" "$unarchived_changes" "$archive_signal" "$docs_sync_gap" "$learn_candidate_scan" "$active_state_count" "$active_state_changes" "$next_action" "$secrets_scan" "$secrets_hits"
+    return 0
+  fi
+
+  echo "zimaflow close"
+  echo
+  printf 'Repository: %s\n' "$root"
+  echo
+
+  if [ "$git_status" = "clean" ]; then
+    print_status_line "Git status" "clean" ""
+  else
+    print_status_line "Git status" "dirty" "$dirty_count changed file(s) in working tree"
+  fi
+
+  if [ -n "$unarchived_changes" ]; then
+    print_status_line "OpenSpec unarchived changes" "found" "$(printf '%s' "$unarchived_changes" | paste -sd ', ' -)"
+  else
+    print_status_line "OpenSpec unarchived changes" "none" ""
+  fi
+
+  if [ "$active_state_count" != "0" ]; then
+    print_status_line "Zimaflow active state" "found" "$(printf '%s' "$active_state_changes" | paste -sd ', ' -)"
+  else
+    print_status_line "Zimaflow active state" "none" ""
+  fi
+
+  if [ "$archive_signal" = "confirmed" ]; then
+    print_status_line "Archive docs sync signal" "confirmed" "archived state records docs_synced: true"
+  elif [ "$archive_signal" = "possible" ]; then
+    print_status_line "Archive docs sync signal" "possible" "openspec/specs changed recently; confirm README / PROGRESS / Decisions docs are synced"
+  else
+    print_status_line "Archive docs sync signal" "none obvious" ""
+  fi
+
+  if [ "$docs_sync_gap" = "possible" ]; then
+    print_status_line "Docs sync gap" "possible" "code/workflow files changed but no obvious README / PROGRESS / docs / Decisions update was detected"
+  elif [ "$docs_sync_gap" = "docs_touched" ]; then
+    print_status_line "Docs sync gap" "docs touched" ""
+  else
+    print_status_line "Docs sync gap" "none obvious" ""
+  fi
+
+  if [ "$learn_candidate_scan" = "recommended" ]; then
+    print_status_line "Learn candidate scan" "recommended" "workflow / skill / rule files changed; list candidates, do not auto-write lessons"
+  else
+    print_status_line "Learn candidate scan" "none obvious" ""
+  fi
+
+  if [ "$secrets_scan" = "suspected" ]; then
+    print_status_line "Secrets scan" "suspected" "$(printf '%s' "$secrets_hits" | paste -sd ', ' -); review before closing, do not commit real keys (use .env + .gitignore)"
+  else
+    print_status_line "Secrets scan" "none obvious" ""
+  fi
+
+  echo
+  echo "Next action: $(human_next_action "$next_action")"
+  echo
+  echo "Reminder: this is a lightweight checklist. For final AI session closure, run session-close-reconciler if anything is uncertain."
+}
+
+run_state() {
+  local format="${1:-human}"
+  local root
+  root="$(find_state_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      print_state_json "" "" 0
+      return 2
+    fi
+    echo "zimaflow state"
+    echo
+    echo "Not inside a git repository."
+    return 2
+  fi
+
+  local records
+  records="$(state_records "$root")"
+
+  local active_count
+  active_count="$(printf '%s\n' "$records" | state_active_count)"
+
+  if [ "$format" = "json" ]; then
+    print_state_json "$root" "$records" "$active_count"
+    return 0
+  fi
+
+  echo "Zimaflow state"
+  echo
+  printf 'Repository: %s\n' "$root"
+  echo
+
+  if [ -z "$records" ]; then
+    print_status_line "State files" "none" "No .zimaflow-state.yaml files found under openspec/changes"
+    echo
+    echo "Active changes: 0"
+    return 0
+  fi
+
+  print_status_line "State files" "found" ""
+  while IFS="$(printf '\t')" read -r change_id phase mode archive_status path; do
+    [ -n "$change_id" ] || continue
+    printf '  - %s  phase=%s  mode=%s  archive=%s\n' "$change_id" "$phase" "$mode" "$archive_status"
+    printf '    %s\n' "$path"
+  done <<EOF
+$records
+EOF
+
+  echo
+  echo "Active changes: $active_count"
+}
+
+context_check_records() {
+  local index_file="$1"
+  local docs_dir="$2"
+  local key value full status
+
+  for key in \
+    architecture_overview \
+    module_map \
+    interface_inventory \
+    data_model_er \
+    test_entry_points \
+    key_flows \
+    implicit_knowledge_qa; do
+    value="$(yaml_nested_value "$index_file" "baseline" "$key")"
+    [ -n "$value" ] || continue
+    full="$(resolve_context_path "$docs_dir" "$value")"
+    if [ -e "$full" ]; then status="present"; else status="missing"; fi
+    printf 'baseline\t%s\t%s\t%s\t%s\n' "$key" "$value" "$full" "$status"
+  done
+
+  for key in latest_handover latest_state; do
+    value="$(yaml_nested_value "$index_file" "workflow" "$key")"
+    [ -n "$value" ] || continue
+    full="$(resolve_context_path "$docs_dir" "$value")"
+    if [ -e "$full" ]; then status="present"; else status="missing"; fi
+    printf 'workflow\t%s\t%s\t%s\t%s\n' "$key" "$value" "$full" "$status"
+  done
+}
+
+context_records_count() {
+  awk 'NF { n++ } END { print n + 0 }'
+}
+
+context_missing_count() {
+  awk -F '\t' '$5 == "missing" { n++ } END { print n + 0 }'
+}
+
+context_next_action() {
+  local status="$1"
+  local missing="$2"
+  if [ "$status" = "missing" ]; then
+    echo "create_context_index"
+  elif [ "$missing" -gt 0 ]; then
+    echo "refresh_baseline"
+  else
+    echo "ok"
+  fi
+}
+
+print_context_json() {
+  local index_file="$1"
+  local docs_dir="$2"
+  local index_status="$3"
+  local records="$4"
+  local checked_count="$5"
+  local missing_count="$6"
+  local next_action="$7"
+
+  printf '{'
+  printf '"context_index":'; json_string "$index_file"; printf ','
+  printf '"docs_dir":'; json_string "$docs_dir"; printf ','
+  printf '"context_index_status":'; json_string "$index_status"; printf ','
+  printf '"checked_count":%s,' "$checked_count"
+  printf '"missing_count":%s,' "$missing_count"
+  printf '"references":['
+  local first="yes" kind key raw full status
+  if [ -n "$records" ]; then
+    while IFS="$(printf '\t')" read -r kind key raw full status; do
+      [ -n "$key" ] || continue
+      if [ "$first" = "no" ]; then printf ','; fi
+      printf '{'
+      printf '"kind":'; json_string "$kind"; printf ','
+      printf '"key":'; json_string "$key"; printf ','
+      printf '"path":'; json_string "$raw"; printf ','
+      printf '"resolved_path":'; json_string "$full"; printf ','
+      printf '"status":'; json_string "$status"
+      printf '}'
+      first="no"
+    done <<EOF
+$records
+EOF
+  fi
+  printf '],'
+  printf '"next_action":'; json_string "$next_action"
+  printf '}\n'
+}
+
+context_human_next_action() {
+  case "$1" in
+    ok) echo "ok" ;;
+    refresh_baseline) echo "refresh baseline" ;;
+    create_context_index) echo "create context index" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+run_context_check() {
+  local format="${1:-human}"
+  local index_file
+  index_file="$(find_context_index)"
+
+  if [ -z "$index_file" ]; then
+    local next_action
+    next_action="$(context_next_action missing 0)"
+    if [ "$format" = "json" ]; then
+      print_context_json "" "" "missing" "" 0 0 "$next_action"
+      return 0
+    fi
+    echo "Context check"
+    echo
+    print_status_line "Context index" "missing" "No .zimaflow/context-index.yaml found from current directory upward"
+    echo
+    echo "Next action: $(context_human_next_action "$next_action")"
+    return 0
+  fi
+
+  local docs_dir records checked_count missing_count next_action
+  docs_dir="$(dirname "$(dirname "$index_file")")"
+  records="$(context_check_records "$index_file" "$docs_dir")"
+  checked_count="$(printf '%s\n' "$records" | context_records_count)"
+  missing_count="$(printf '%s\n' "$records" | context_missing_count)"
+  next_action="$(context_next_action present "$missing_count")"
+
+  if [ "$format" = "json" ]; then
+    print_context_json "$index_file" "$docs_dir" "present" "$records" "$checked_count" "$missing_count" "$next_action"
+    return 0
+  fi
+
+  echo "Context check"
+  echo
+  printf 'Context index: %s\n' "$index_file"
+  printf 'Docs dir:      %s\n' "$docs_dir"
+  echo
+  print_status_line "References checked" "$checked_count" ""
+  print_status_line "Missing references" "$missing_count" ""
+  if [ -n "$records" ]; then
+    echo
+    while IFS="$(printf '\t')" read -r kind key raw full status; do
+      [ -n "$key" ] || continue
+      printf '  - [%s] %s.%s -> %s\n' "$status" "$kind" "$key" "$raw"
+      if [ "$status" = "missing" ]; then
+        printf '    missing: %s\n' "$full"
+      fi
+    done <<EOF
+$records
+EOF
+  fi
+  echo
+  echo "Next action: $(context_human_next_action "$next_action")"
+  echo
+  echo "Reminder: context-check is read-only. It reports missing pointers but never rewrites context-index or baseline docs."
+}
+
+state_apply_options() {
+  local command="$1"
+  shift
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --phase)
+        [ "${2:-}" ] || { echo "Missing value for --phase" >&2; return 2; }
+        STATE_PHASE="$2"
+        shift 2
+        ;;
+      --mode)
+        [ "${2:-}" ] || { echo "Missing value for --mode" >&2; return 2; }
+        STATE_MODE="$2"
+        shift 2
+        ;;
+      --contract)
+        [ "${2:-}" ] || { echo "Missing value for --contract" >&2; return 2; }
+        STATE_CONTRACT_PATH="$2"
+        STATE_CONTRACT_STATUS="confirmed"
+        [ -n "$STATE_CONTRACT_CONFIRMED_AT" ] || STATE_CONTRACT_CONFIRMED_AT="$(now_iso)"
+        shift 2
+        ;;
+      --decision)
+        [ "${2:-}" ] || { echo "Missing value for --decision" >&2; return 2; }
+        STATE_DECISION_PATH="$2"
+        STATE_DECISION_STATUS="confirmed"
+        shift 2
+        ;;
+      --branch)
+        [ "${2:-}" ] || { echo "Missing value for --branch" >&2; return 2; }
+        STATE_BRANCH="$2"
+        STATE_ISOLATION="branch"
+        shift 2
+        ;;
+      --worktree)
+        [ "${2:-}" ] || { echo "Missing value for --worktree" >&2; return 2; }
+        STATE_WORKTREE_PATH="$2"
+        STATE_ISOLATION="worktree"
+        shift 2
+        ;;
+      --verify)
+        [ "${2:-}" ] || { echo "Missing value for --verify" >&2; return 2; }
+        STATE_OPSX_VERIFY="$2"
+        [ -n "$STATE_VERIFIED_AT" ] || STATE_VERIFIED_AT="$(now_iso)"
+        shift 2
+        ;;
+      --full-tests)
+        [ "${2:-}" ] || { echo "Missing value for --full-tests" >&2; return 2; }
+        STATE_FULL_TESTS="$2"
+        [ -n "$STATE_VERIFIED_AT" ] || STATE_VERIFIED_AT="$(now_iso)"
+        shift 2
+        ;;
+      --last-command)
+        [ "${2:-}" ] || { echo "Missing value for --last-command" >&2; return 2; }
+        STATE_LAST_COMMAND="$2"
+        shift 2
+        ;;
+      --last-result)
+        [ "${2:-}" ] || { echo "Missing value for --last-result" >&2; return 2; }
+        STATE_LAST_RESULT="$2"
+        [ -n "$STATE_VERIFIED_AT" ] || STATE_VERIFIED_AT="$(now_iso)"
+        shift 2
+        ;;
+      --evidence-path)
+        [ "${2:-}" ] || { echo "Missing value for --evidence-path" >&2; return 2; }
+        STATE_EVIDENCE_PATH="$2"
+        shift 2
+        ;;
+      --blocked-reason)
+        [ "${2+x}" ] || { echo "Missing value for --blocked-reason" >&2; return 2; }
+        STATE_BLOCKED_REASON="$2"
+        shift 2
+        ;;
+      --archive-status)
+        [ "${2:-}" ] || { echo "Missing value for --archive-status" >&2; return 2; }
+        STATE_ARCHIVE_STATUS="$2"
+        if [ "$STATE_ARCHIVE_STATUS" = "archived" ] && [ -z "$STATE_ARCHIVED_AT" ]; then
+          STATE_ARCHIVED_AT="$(now_iso)"
+        fi
+        shift 2
+        ;;
+      --handover)
+        [ "${2:-}" ] || { echo "Missing value for --handover" >&2; return 2; }
+        STATE_HANDOVER_PATH="$2"
+        STATE_HANDOVER_UPDATED_AT="$(now_iso)"
+        shift 2
+        ;;
+      *)
+        echo "Unknown state $command option: $1" >&2
+        return 2
+        ;;
+    esac
+  done
+}
+
+run_state_write() {
+  local command="$1"
+  local change="${2:-}"
+  shift 2 || true
+
+  validate_change_id "$change" || return 2
+
+  local root
+  root="$(find_state_root)"
+  if [ -z "$root" ]; then
+    echo "Not inside a git repository."
+    return 2
+  fi
+
+  local file
+  file="$(state_path_for_change "$root" "$change")"
+
+  if [ "$command" = "update" ] && [ ! -f "$file" ]; then
+    echo "State file not found: $file"
+    return 2
+  fi
+
+  state_load_or_defaults "$file" "$change"
+  state_apply_options "$command" "$@" || return 2
+  state_write_file "$file"
+
+  if [ "$command" = "init" ]; then
+    echo "Initialized: $file"
+  else
+    echo "Updated: $file"
+  fi
+}
+
+run_drift_check() {
+  local change="${1:-}"
+  shift || true
+
+  validate_change_id "$change" || return 2
+
+  local format="human"
+  local write_baseline="false"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        format="json"
+        shift
+        ;;
+      --write)
+        write_baseline="true"
+        shift
+        ;;
+      *)
+        echo "Unknown drift-check option: $1" >&2
+        return 2
+        ;;
+    esac
+  done
+
+  local root
+  root="$(find_state_root)"
+  if [ -z "$root" ]; then
+    echo "Not inside a git repository."
+    return 2
+  fi
+
+  local file
+  file="$(state_path_for_change "$root" "$change")"
+  if [ ! -f "$file" ]; then
+    echo "State file not found: $file"
+    return 2
+  fi
+
+  state_load_or_defaults "$file" "$change"
+
+  local records
+  records="$(drift_records "$root")"
+
+  if [ "$write_baseline" = "true" ]; then
+    local artifact path stored_hash current_hash status
+    while IFS="|" read -r artifact path stored_hash current_hash status; do
+      [ -n "$artifact" ] || continue
+      [ -n "$current_hash" ] || continue
+      case "$artifact" in
+        contract) STATE_HASH_CONTRACT="$current_hash" ;;
+        decision) STATE_HASH_DECISION="$current_hash" ;;
+        proposal) STATE_HASH_PROPOSAL="$current_hash" ;;
+        design) STATE_HASH_DESIGN="$current_hash" ;;
+        tasks) STATE_HASH_TASKS="$current_hash" ;;
+      esac
+    done <<EOF
+$records
+EOF
+    state_write_file "$file"
+    records="$(drift_records "$root")"
+  fi
+
+  local drift_count
+  drift_count="$(printf '%s\n' "$records" | drift_count_records)"
+
+  if [ "$format" = "json" ]; then
+    print_drift_json "$root" "$STATE_CHANGE_ID" "$write_baseline" "$drift_count" "$records"
+    return 0
+  fi
+
+  echo "Zimaflow drift check"
+  echo
+  printf 'Repository: %s\n' "$root"
+  printf 'Change: %s\n' "$STATE_CHANGE_ID"
+  printf 'State: %s\n' "$file"
+  echo
+
+  while IFS="|" read -r artifact path stored_hash current_hash status; do
+    [ -n "$artifact" ] || continue
+    printf '  - %-9s %-14s %s\n' "$artifact" "$status" "$path"
+  done <<EOF
+$records
+EOF
+
+  echo
+  echo "Drift count: $drift_count"
+  if [ "$write_baseline" = "true" ]; then
+    echo "Baseline written: yes"
+  fi
+}
+
+run_stale_review() {
+  local format="human"
+  local days="90"
+  local include_rules="no"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        format="json"
+        shift
+        ;;
+      --days)
+        [ "${2:-}" ] || { echo "Missing value for --days" >&2; return 2; }
+        days="$2"
+        shift 2
+        ;;
+      --include-rules)
+        include_rules="yes"
+        shift
+        ;;
+      *)
+        echo "Unknown stale-review option: $1" >&2
+        return 2
+        ;;
+    esac
+  done
+
+  local root
+  root="$(find_knowledge_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      print_stale_json "" "$days" "" "" 0
+      return 2
+    fi
+    echo "zimaflow stale-review"
+    echo
+    echo "Not inside a git repository."
+    return 2
+  fi
+
+  local data_home
+  data_home="$(resolve_knowledge_data_home)" || return $?
+
+  local user_lessons="$data_home/lessons-common.md"
+  local legacy_lessons="$root/references/lessons-common.md"
+  if [ ! -f "$user_lessons" ] && [ ! -f "$legacy_lessons" ]; then
+    if [ "$format" = "json" ]; then
+      print_stale_json "$root" "$days" "" "" 0
+      return 0
+    fi
+    echo "Zimaflow stale review"
+    echo
+    echo "Candidates: 0"
+    return 0
+  fi
+
+  local cutoff
+  cutoff="$(cutoff_ymd "$days")"
+
+  local candidates
+  candidates="$(stale_candidates "$root" "$days" "$include_rules" "$cutoff" "$data_home/knowledge-usage-ledger.jsonl" "$user_lessons")"
+
+  local candidate_count
+  if [ -n "$candidates" ]; then
+    candidate_count="$(printf '%s\n' "$candidates" | awk 'NF { count++ } END { print count + 0 }')"
+  else
+    candidate_count="0"
+  fi
+
+  if [ "$format" = "json" ]; then
+    print_stale_json "$root" "$days" "$cutoff" "$candidates" "$candidate_count"
+    return 0
+  fi
+
+  echo "Zimaflow stale review"
+  echo
+  printf 'Repository: %s\n' "$root"
+  printf 'Window: %s days (cutoff: %s)\n' "$days" "$cutoff"
+  echo
+
+  if [ "$candidate_count" = "0" ]; then
+    echo "Candidates: 0"
+    return 0
+  fi
+
+  echo "Candidates: $candidate_count"
+  while IFS="$(printf '\t')" read -r knowledge_id level created_at last_type last_seen; do
+    [ -n "$knowledge_id" ] || continue
+    printf '  - %s  level=%s  created=%s' "$knowledge_id" "$level" "$created_at"
+    if [ -n "$last_seen" ]; then
+      printf '  last_%s=%s' "$last_type" "$last_seen"
+    else
+      printf '  last_activity=none'
+    fi
+    printf '\n'
+  done <<EOF
+$candidates
+EOF
+}
+
+RECALL_BITROT_THRESHOLD=30
+RECALL_SUMMARY_LINES=8
+
+# Valid recall count option: a positive integer (no zero, no leading zero, no sign).
+recall_valid_count() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    0|0*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+recall_path_display() {
+  local root="$1"
+  local path="$2"
+  local docs_root="${3:-}"
+  if [ -z "$path" ]; then
+    printf '(none)'
+    return 0
+  fi
+  local resolved
+  resolved="$(resolve_artifact_path "$root" "$path" "$docs_root")" || return
+  if [ -f "$resolved" ]; then
+    printf '%s' "$path"
+  else
+    printf '%s (missing)' "$path"
+  fi
+}
+
+recall_handover_status() {
+  local root="$1"
+  local path="$2"
+  local docs_root="${3:-}"
+  if [ -z "$path" ]; then
+    printf 'none'
+    return 0
+  fi
+  local resolved
+  resolved="$(resolve_artifact_path "$root" "$path" "$docs_root")" || return
+  if [ -f "$resolved" ]; then
+    printf 'present'
+  else
+    printf 'missing'
+  fi
+}
+
+# True if a line looks like it assigns a real secret value (same shape as
+# scan_secrets). Used to redact handover summary lines, never to print values.
+recall_is_secret_like() {
+  local line="$1"
+  local q="\"'\`"
+  local key_re='(api[_-]?key|secret|token|passwd|password|private[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token)'
+  local line_re="${key_re}[${q}]?[[:space:]]*[:=]+[[:space:]]*[${q}][^${q}]{8,}"
+  local placeholder_re='(process\.env|import\.meta\.env|os\.environ|getenv\(|\$\{|<[a-zA-Z/]|example|placeholder|changeme|your[_-]|dummy|redacted|sample|xxxxxxxx|\*\*\*\*)'
+  printf '%s' "$line" | grep -iqE "$line_re" || return 1
+  printf '%s' "$line" | grep -iqE "$placeholder_re" && return 1
+  return 0
+}
+
+# Read the latest handover file (only the state-recorded path, never a dir scan)
+# and emit up to 8 short summary lines. Section-priority first (遗留与下一步 /
+# Guardrail 承接 / Release readiness), then keyword fallback. Read-only.
+# Secret-like lines are redacted; long lines are truncated. awk/grep only.
+recall_handover_summary() {
+  local root="$1"
+  local path="$2"
+  local limit="${3:-$RECALL_SUMMARY_LINES}"
+  local docs_root="${4:-}"
+  [ -n "$path" ] || return 0
+  local resolved
+  resolved="$(resolve_artifact_path "$root" "$path" "$docs_root")" || return
+  [ -f "$resolved" ] || return 0
+
+  local candidates
+  candidates="$(awk -v limit="$limit" '
+    function trim(s){ sub(/^[[:space:]]+/,"",s); sub(/[[:space:]]+$/,"",s); return s }
+    /^#+[[:space:]]/ {
+      lc=tolower($0)
+      if (lc ~ /(遗留与下一步|guardrail 承接|release readiness)/) insec=1; else insec=0
+      next
+    }
+    {
+      raw=trim($0)
+      if (raw=="") next
+      if (insec) { sec[++ns]=raw; next }
+      lc=tolower($0)
+      if (lc ~ /(release-check|release readiness|hotfix|rewind|secret|待确认|next|todo)/) kw[++nk]=raw
+    }
+    END {
+      n=0
+      for (i=1;i<=ns;i++) if (!(sec[i] in seen)) { seen[sec[i]]=1; print sec[i]; if (++n>=limit) exit }
+      for (i=1;i<=nk;i++) if (!(kw[i] in seen)) { seen[kw[i]]=1; print kw[i]; if (++n>=limit) exit }
+    }
+  ' "$resolved")"
+
+  [ -n "$candidates" ] || return 0
+
+  printf '%s\n' "$candidates" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if recall_is_secret_like "$line"; then
+      printf '%s\n' "[redacted secret-like line]"
+    elif [ "${#line}" -gt 180 ]; then
+      printf '%s\n' "${line:0:180}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
+# Emit "status<TAB>days<TAB>reason" for one change's bit-rot.
+# Priority of freshness signal: verified_at > handover.updated_at > state mtime.
+recall_bitrot() {
+  local threshold="$1"
+  local verified_at="$2"
+  local handover_updated_at="$3"
+  local state_file="$4"
+
+  local reason base_epoch="" days=""
+  local vy hy
+  vy="$(ts_to_ymd "$verified_at")"
+  hy="$(ts_to_ymd "$handover_updated_at")"
+
+  if [ -n "$vy" ]; then
+    reason="verified_at"
+    base_epoch="$(ymd_to_epoch "$vy")"
+  elif [ -n "$hy" ]; then
+    reason="handover_updated_at"
+    base_epoch="$(ymd_to_epoch "$hy")"
+  else
+    reason="state_mtime"
+    base_epoch="$(file_mtime_epoch "$state_file")"
+  fi
+
+  if [ -n "$base_epoch" ]; then
+    days="$(days_since_epoch "$base_epoch")"
+  fi
+
+  local status="fresh"
+  if [ -n "$days" ] && [ "$days" -ge "$threshold" ]; then
+    status="stale"
+  fi
+  printf '%s\t%s\t%s\n' "$status" "${days:-0}" "$reason"
+}
+
+# Build one change JSON object from current STATE_* globals + bit-rot result.
+recall_change_json() {
+  local status="$1" days="$2" reason="$3" handover_status="$4" summary="$5"
+  printf '{'
+  printf '"change_id":'; json_string "$STATE_CHANGE_ID"; printf ','
+  printf '"phase":'; json_string "$STATE_PHASE"; printf ','
+  printf '"mode":'; json_string "$STATE_MODE"; printf ','
+  printf '"archive_status":'; json_string "$STATE_ARCHIVE_STATUS"; printf ','
+  printf '"contract_path":'; json_string "$STATE_CONTRACT_PATH"; printf ','
+  printf '"decision_path":'; json_string "$STATE_DECISION_PATH"; printf ','
+  printf '"proposal_path":'; json_string "$STATE_PROPOSAL_PATH"; printf ','
+  printf '"design_path":'; json_string "$STATE_DESIGN_PATH"; printf ','
+  printf '"tasks_path":'; json_string "$STATE_TASKS_PATH"; printf ','
+  printf '"execution_input_status":'; json_string "$STATE_EXECUTION_INPUT_STATUS"; printf ','
+  printf '"handover_path":'; json_string "$STATE_HANDOVER_PATH"; printf ','
+  printf '"handover_status":'; json_string "$handover_status"; printf ','
+  printf '"handover_updated_at":'; json_string "$STATE_HANDOVER_UPDATED_AT"; printf ','
+  printf '"opsx_verify":'; json_string "$STATE_OPSX_VERIFY"; printf ','
+  printf '"full_tests":'; json_string "$STATE_FULL_TESTS"; printf ','
+  printf '"last_command":'; json_string "$STATE_LAST_COMMAND"; printf ','
+  printf '"last_result":'; json_string "$STATE_LAST_RESULT"; printf ','
+  printf '"verified_at":'; json_string "$STATE_VERIFIED_AT"; printf ','
+  printf '"bit_rot":{'
+  printf '"status":'; json_string "$status"; printf ','
+  printf '"stale_days":%s,' "${days:-0}"
+  printf '"reason":'; json_string "$reason"
+  printf '},'
+  printf '"handover_summary":'; json_string_array "$summary"
+  printf '}'
+}
+
+recall_human_next_action() {
+  case "$1" in
+    continue) echo "continue" ;;
+    refresh_execution_input) echo "refresh execution input" ;;
+    run_tests) echo "run tests" ;;
+    refresh_handover) echo "refresh handover" ;;
+    need_manual_confirmation) echo "need manual confirmation" ;;
+    no_active_change) echo "no active change" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+run_recall() {
+  local format="human"
+  local threshold="$RECALL_BITROT_THRESHOLD"
+  local summary_lines="$RECALL_SUMMARY_LINES"
+  local all_mode="no"
+  local threshold_set="no"
+  local summary_lines_set="no"
+  local project_name_arg=""
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        format="json"
+        shift
+        ;;
+      --all)
+        all_mode="yes"
+        shift
+        ;;
+      --project)
+        [ -n "${2:-}" ] || { echo "Missing value for --project" >&2; return 2; }
+        project_name_arg="$2"
+        shift 2
+        ;;
+      --days)
+        recall_valid_count "${2:-}" || { echo "Invalid --days value: ${2:-(missing)} (expected positive integer)" >&2; return 2; }
+        threshold="$2"
+        threshold_set="yes"
+        shift 2
+        ;;
+      --summary-lines)
+        recall_valid_count "${2:-}" || { echo "Invalid --summary-lines value: ${2:-(missing)} (expected positive integer)" >&2; return 2; }
+        summary_lines="$2"
+        summary_lines_set="yes"
+        shift 2
+        ;;
+      *)
+        echo "Unknown recall option: $1" >&2
+        return 2
+        ;;
+    esac
+  done
+
+  if [ "$all_mode" = "yes" ] && [ -n "$project_name_arg" ]; then
+    echo "--all and --project are mutually exclusive" >&2
+    return 2
+  fi
+
+  if [ "$all_mode" = "yes" ]; then
+    local sl=0
+    [ "$summary_lines_set" = "yes" ] && sl="$summary_lines"
+    run_recall_all "$format" "$threshold" "$sl" "$threshold_set" "$summary_lines_set"
+    return $?
+  fi
+
+  if [ -n "$project_name_arg" ]; then
+    run_recall_project "$format" "$threshold" "$summary_lines" "$project_name_arg" "$threshold_set" "$summary_lines_set"
+    return $?
+  fi
+
+  # single-repo recall (default)
+  local root
+  root="$(find_state_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      printf '{"repository":"","active_count":0,"changes":[],"bit_rot_summary":{"threshold_days":%s,"stale_count":0,"stale_changes":[]},"next_action":"no_active_change"}\n' "$threshold"
+      return 2
+    fi
+    echo "zimaflow recall"
+    echo
+    echo "Not inside a git repository."
+    echo "Next action: no active change"
+    return 2
+  fi
+
+  local context schema project_name code_root docs_root project_config projects_file docs_root_source initialized
+  context="$(resolve_project_context "$root")" || return
+  IFS=$'\t' read -r schema project_name code_root docs_root project_config projects_file docs_root_source initialized <<EOF
+$context
+EOF
+  root="$code_root"
+  recall_render_single "$format" "$threshold" "$summary_lines" "$root" "" "" "" "$docs_root" "$project_config"
+}
+
+# Match a project by name in the registry, resolve its code_repo, and render the
+# single-repo recall view for it. Exits non-zero if named project cannot be read.
+run_recall_project() {
+  local format="$1" threshold="$2" summary_lines="$3" name="$4"
+  local threshold_set="${5:-yes}" summary_lines_set="${6:-yes}"
+
+  local registry projects
+  registry="$(recall_registry_path)" || return
+  projects="$(recall_registry_projects "$registry")" || return
+
+  local lname
+  lname="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+
+  local matched_name="" matched_repo="" matched_docs="" matched_status="" ci_name="" ci_repo="" ci_docs="" ci_status=""
+  while IFS="$(printf '\t')" read -r pname prepo pdocs pstatus; do
+    [ -n "$pname" ] || continue
+    recall_registry_status_is_inactive "$pstatus" && continue
+    if [ "$pname" = "$name" ]; then
+      matched_name="$pname"; matched_repo="$prepo"; matched_docs="$pdocs"; matched_status="$pstatus"
+      break
+    fi
+    if [ -z "$ci_name" ] && [ "$(printf '%s' "$pname" | tr '[:upper:]' '[:lower:]')" = "$lname" ]; then
+      ci_name="$pname"; ci_repo="$prepo"; ci_docs="$pdocs"; ci_status="$pstatus"
+    fi
+  done <<EOF
+$projects
+EOF
+
+  if [ -z "$matched_name" ]; then
+    matched_name="$ci_name"; matched_repo="$ci_repo"; matched_docs="$ci_docs"; matched_status="$ci_status"
+  fi
+
+  if [ -z "$matched_name" ]; then
+    echo "Project not found in registry: $name" >&2
+    return 2
+  fi
+
+  case "$matched_repo" in
+    ""|"—"|"-"|"–")
+      echo "Project '$matched_name' has no code_repo in registry" >&2
+      return 2
+      ;;
+  esac
+
+  local repo docs_root project_config context
+  if [ -n "${ZIMAFLOW_PROJECT_REGISTRY:-}" ]; then
+    repo="$(expand_tilde "$matched_repo")"
+  else
+    repo="$(expand_user_path "$matched_repo")" || { echo "Invalid code_root in registry: $matched_repo" >&2; return 2; }
+  fi
+  if [ ! -d "$repo" ]; then
+    echo "Project '$matched_name' code_repo path not found: $matched_repo" >&2
+    return 2
+  fi
+  repo="$(cd "$repo" && pwd -P)"
+
+  if [ -n "${ZIMAFLOW_PROJECT_REGISTRY:-}" ]; then
+    if [ -n "$matched_docs" ]; then
+      docs_root="$(recall_resolve_docs_dir "$repo" "$matched_docs")"
+      docs_root="$(canonical_path_for_write "$docs_root")" || return 2
+    else
+      docs_root="$(canonical_path_for_write "$repo/docs/zimaflow")" || return 2
+    fi
+    project_config="$repo/.zimaflow/project.yaml"
+  else
+    local schema resolved_name resolved_root projects_file docs_source initialized
+    context="$(resolve_project_context "$repo")" || return
+    IFS=$'\t' read -r schema resolved_name resolved_root docs_root project_config projects_file docs_source initialized <<EOF
+$context
+EOF
+  fi
+
+  local policy_path policy_threshold policy_summary_lines
+  policy_path="$(recall_policy_path "$repo" "$docs_root")"
+  policy_threshold="$(recall_policy_count "$policy_path" threshold_days days)"
+  policy_summary_lines="$(recall_policy_count "$policy_path" summary_lines)"
+  if [ "$threshold_set" != "yes" ] && [ -n "$policy_threshold" ]; then
+    threshold="$policy_threshold"
+  fi
+  if [ "$summary_lines_set" != "yes" ] && [ -n "$policy_summary_lines" ]; then
+    summary_lines="$policy_summary_lines"
+  fi
+
+  recall_render_single "$format" "$threshold" "$summary_lines" "$repo" "$matched_name" "$repo" "$registry" "$docs_root" "$project_config"
+}
+
+# Render single-repo recall for a given root. When project_name is set, emit the
+# --project header and extra JSON fields (project_name / code_repo / registry_path).
+recall_render_single() {
+  local format="$1" threshold="$2" summary_lines="$3" root="$4"
+  local project_name="${5:-}" code_repo="${6:-}" registry_path="${7:-}"
+  local docs_root="${8:-}" project_config="${9:-}"
+
+  local files
+  files="$(state_files "$root")"
+
+  local active_count=0
+  local changes_json=""
+  local human_blocks=""
+  local stale_ids=""
+  local stale_count=0
+  local has_run_tests="no" has_refresh="no" has_manual="no" has_execution_input_refresh="no"
+  local first="yes"
+
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    local fallback_change
+    fallback_change="$(state_change_from_path "$root" "$file")"
+    state_load_or_defaults "$file" "$fallback_change"
+    [ "$STATE_PHASE" = "closed" ] && continue
+    local artifact_ref
+    for artifact_ref in "$STATE_CONTRACT_PATH" "$STATE_DECISION_PATH" "$STATE_PROPOSAL_PATH" "$STATE_DESIGN_PATH" "$STATE_TASKS_PATH" "$STATE_HANDOVER_PATH" "$STATE_EXECUTION_INPUT_PATH"; do
+      [ -z "$artifact_ref" ] || resolve_artifact_path "$root" "$artifact_ref" "$docs_root" >/dev/null || return 2
+    done
+    active_count=$((active_count + 1))
+
+    STATE_EXECUTION_INPUT_STATUS="$(execution_input_status "$(drift_records "$root")" "$root")"
+    [ "$STATE_EXECUTION_INPUT_STATUS" = "stale" ] && has_execution_input_refresh="yes"
+
+    local br status days reason
+    br="$(recall_bitrot "$threshold" "$STATE_VERIFIED_AT" "$STATE_HANDOVER_UPDATED_AT" "$file")"
+    status="$(printf '%s' "$br" | cut -f1)"
+    days="$(printf '%s' "$br" | cut -f2)"
+    reason="$(printf '%s' "$br" | cut -f3)"
+
+    if [ "$status" = "stale" ]; then
+      stale_count=$((stale_count + 1))
+      stale_ids="$(printf '%s\n%s' "$stale_ids" "$STATE_CHANGE_ID")"
+      case "$reason" in
+        verified_at) has_run_tests="yes" ;;
+        handover_updated_at) has_refresh="yes" ;;
+        state_mtime) has_manual="yes" ;;
+      esac
+    fi
+
+    local handover_status
+    handover_status="$(recall_handover_status "$root" "$STATE_HANDOVER_PATH" "$docs_root")" || return
+
+    local d_contract d_decision d_proposal d_design d_tasks d_handover
+    d_contract="$(recall_path_display "$root" "$STATE_CONTRACT_PATH" "$docs_root")" || return
+    d_decision="$(recall_path_display "$root" "$STATE_DECISION_PATH" "$docs_root")" || return
+    d_proposal="$(recall_path_display "$root" "$STATE_PROPOSAL_PATH" "$docs_root")" || return
+    d_design="$(recall_path_display "$root" "$STATE_DESIGN_PATH" "$docs_root")" || return
+    d_tasks="$(recall_path_display "$root" "$STATE_TASKS_PATH" "$docs_root")" || return
+    d_handover="$(recall_path_display "$root" "$STATE_HANDOVER_PATH" "$docs_root")" || return
+
+    local bitrot_line
+    if [ "$status" = "stale" ]; then
+      bitrot_line="bit-rot:   stale (${days}d, based on ${reason}) — rerun tests / recheck deps & CI / refresh handover"
+    else
+      bitrot_line="bit-rot:   fresh (${days}d, based on ${reason})"
+    fi
+
+    local summary
+    summary="$(recall_handover_summary "$root" "$STATE_HANDOVER_PATH" "$summary_lines" "$docs_root")" || return
+
+    local block
+    printf -v block -- '- %s  phase=%s  mode=%s  archive=%s\n    contract:  %s\n    decision:  %s\n    proposal:  %s\n    design:    %s\n    tasks:     %s\n    handover:  %s\n    verify:    opsx_verify=%s  full_tests=%s  last_command=%s  last_result=%s  verified_at=%s\n    handover updated: %s\n    %s\n' \
+      "$STATE_CHANGE_ID" "$STATE_PHASE" "$STATE_MODE" "$STATE_ARCHIVE_STATUS" \
+      "$d_contract" "$d_decision" "$d_proposal" "$d_design" "$d_tasks" "$d_handover" \
+      "$STATE_OPSX_VERIFY" "$STATE_FULL_TESTS" "$STATE_LAST_COMMAND" "$STATE_LAST_RESULT" "$STATE_VERIFIED_AT" \
+      "$STATE_HANDOVER_UPDATED_AT" "$bitrot_line"
+
+    local summary_human
+    if [ -n "$summary" ]; then
+      summary_human="    handover summary:"$'\n'
+      while IFS= read -r sline; do
+        [ -n "$sline" ] || continue
+        summary_human="${summary_human}      ${sline}"$'\n'
+      done <<EOF
+$summary
+EOF
+    else
+      summary_human="    handover summary: none obvious"$'\n'
+    fi
+
+    human_blocks="${human_blocks}${block}${summary_human}"
+
+    if [ "$first" = "no" ]; then
+      changes_json="${changes_json},"
+    fi
+    changes_json="${changes_json}$(recall_change_json "$status" "$days" "$reason" "$handover_status" "$summary")"
+    first="no"
+  done <<EOF
+$files
+EOF
+
+  local next_action
+  if [ "$active_count" -eq 0 ]; then
+    next_action="no_active_change"
+  elif [ "$has_execution_input_refresh" = "yes" ]; then
+    next_action="refresh_execution_input"
+  elif [ "$has_run_tests" = "yes" ]; then
+    next_action="run_tests"
+  elif [ "$has_refresh" = "yes" ]; then
+    next_action="refresh_handover"
+  elif [ "$has_manual" = "yes" ]; then
+    next_action="need_manual_confirmation"
+  else
+    next_action="continue"
+  fi
+
+  if [ "$format" = "json" ]; then
+    local stale_ids_clean
+    stale_ids_clean="$(printf '%s\n' "$stale_ids" | awk 'NF')"
+    printf '{'
+    printf '"repository":'; json_string "$root"; printf ','
+    printf '"active_count":%s,' "$active_count"
+    printf '"changes":[%s],' "$changes_json"
+    printf '"bit_rot_summary":{'
+    printf '"threshold_days":%s,' "$threshold"
+    printf '"stale_count":%s,' "$stale_count"
+    printf '"stale_changes":'; json_string_array "$stale_ids_clean"
+    printf '},'
+    printf '"next_action":'; json_string "$next_action"
+    printf ','
+    printf '"docs_root":'; json_string "$docs_root"; printf ','
+    printf '"project_config":'; json_string "$project_config"
+    if [ -n "$project_name" ]; then
+      printf ','
+      printf '"project_name":'; json_string "$project_name"; printf ','
+      printf '"code_repo":'; json_string "$code_repo"; printf ','
+      printf '"registry_path":'; json_string "$registry_path"
+    fi
+    printf '}\n'
+    return 0
+  fi
+
+  if [ -n "$project_name" ]; then
+    echo "zimaflow recall --project $project_name"
+  else
+    echo "zimaflow recall"
+  fi
+  echo
+  if [ -n "$project_name" ]; then
+    printf 'Project: %s\n' "$project_name"
+  fi
+  printf 'Repository: %s\n' "$root"
+  printf 'Docs root: %s\n' "$docs_root"
+  echo
+  printf 'Active changes: %s\n' "$active_count"
+  echo
+  if [ "$active_count" -gt 0 ]; then
+    printf '%s\n' "$human_blocks"
+  fi
+  if [ "$stale_count" -gt 0 ]; then
+    print_status_line "Bit-rot" "stale" "$stale_count change(s) beyond $threshold days; rerun tests, recheck deps/CI, refresh handover"
+  else
+    print_status_line "Bit-rot" "none obvious" "no active change older than $threshold days"
+  fi
+  echo
+  echo "Next action: $(recall_human_next_action "$next_action")"
+}
+
+# --- cross-project recall (recall --all) ---
+
+recall_registry_path() {
+  if [ -n "${ZIMAFLOW_PROJECT_REGISTRY:-}" ]; then
+    printf '%s' "$ZIMAFLOW_PROJECT_REGISTRY"
+  else
+    resolve_projects_file
+  fi
+}
+
+expand_tilde() {
+  case "$1" in
+    "~") printf '%s' "$HOME" ;;
+    "~/"*) printf '%s/%s' "$HOME" "${1#\~/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+recall_expand_registry_path() {
+  if [ -n "${ZIMAFLOW_PROJECT_REGISTRY:-}" ]; then
+    expand_tilde "$1"
+  else
+    expand_user_path "$1"
+  fi
+}
+
+recall_resolve_docs_dir() {
+  local repo="$1" docs_dir="$2"
+  [ -n "$docs_dir" ] || return 0
+  local expanded
+  expanded="$(expand_tilde "$docs_dir")"
+  if path_is_absolute "$expanded"; then
+    printf '%s' "$expanded"
+  else
+    printf '%s/%s' "$repo" "$expanded"
+  fi
+}
+
+recall_policy_path() {
+  local repo="$1" docs_dir="$2"
+  local resolved
+  resolved="$(recall_resolve_docs_dir "$repo" "$docs_dir")"
+  [ -n "$resolved" ] || return 0
+  printf '%s/.zimaflow/recall-policy.yaml' "$resolved"
+}
+
+recall_policy_count() {
+  local file="$1"
+  shift
+  [ -f "$file" ] || return 0
+  local key value
+  for key in "$@"; do
+    value="$(yaml_nested_value "$file" "recall" "$key")"
+    if recall_valid_count "$value"; then
+      printf '%s' "$value"
+      return 0
+    fi
+  done
+}
+
+# Parse the registry markdown table conservatively: emit
+# "name<TAB>code_repo<TAB>docs_dir<TAB>status" for each data row. Prefer named
+# columns when present, but keep the original column-1/name + column-2/code_repo
+# fallback for older registries.
+recall_markdown_registry_projects() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  awk -F'|' '
+    function trim(s){ gsub(/^[ \t]+|[ \t]+$/,"",s); return s }
+    function norm(s){
+      s=trim(s)
+      gsub(/[`*]/,"",s)
+      s=tolower(s)
+      gsub(/[ _-]+/,"",s)
+      return s
+    }
+    function is_sep_row(  i,v,seen){
+      seen=0
+      for (i=2; i<NF; i++) {
+        v=trim($i)
+        if (v=="") continue
+        seen=1
+        if (v !~ /^:?-+:?$/) return 0
+      }
+      return seen
+    }
+    /^[[:space:]]*\|/ {
+      if (is_sep_row()) next
+      if (!header_seen) {
+        for (i=2; i<NF; i++) {
+          h=norm($i)
+          if (h=="项目" || h=="项目名" || h=="project" || h=="name") name_col=i
+          else if (h=="coderepo" || h=="repo" || h=="repository" || h=="path" || h=="codepath" || h=="代码仓" || h=="代码仓库" || h=="代码路径") repo_col=i
+          else if (h=="docsdir" || h=="docs" || h=="docspath" || h=="文档目录" || h=="项目文档目录") docs_col=i
+          else if (h=="状态" || h=="status") status_col=i
+        }
+        if (name_col || repo_col || docs_col || status_col) {
+          if (!name_col) name_col=2
+          if (!repo_col) repo_col=3
+          header_seen=1
+          next
+        }
+        name_col=2
+        repo_col=3
+        header_seen=1
+      }
+      name=trim($(name_col)); repo=trim($(repo_col))
+      docs=(docs_col ? trim($(docs_col)) : "")
+      status=(status_col ? trim($(status_col)) : "")
+      if (name=="" || norm(name)=="项目" || norm(name)=="project" || norm(name)=="name") next
+      if (name ~ /^[-: ]+$/) next
+      print name "\t" repo "\t" docs "\t" status
+    }
+  ' "$file"
+}
+
+recall_registry_projects() {
+  local file="$1"
+  if [ -n "${ZIMAFLOW_PROJECT_REGISTRY:-}" ]; then
+    recall_markdown_registry_projects "$file"
+  else
+    projects_registry_entries "$file"
+  fi
+}
+
+recall_registry_status_is_inactive() {
+  local status="$1"
+  case "$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')" in
+    archived|archive|inactive|disabled|closed|done|归档|已归档|停用|关闭|已关闭|完成)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Per-change next hint from bit-rot status/reason.
+recall_change_hint() {
+  local status="$1" reason="$2"
+  if [ "$status" != "stale" ]; then
+    echo "continue"
+    return 0
+  fi
+  case "$reason" in
+    verified_at) echo "run_tests" ;;
+    handover_updated_at) echo "refresh_handover" ;;
+    *) echo "need_manual_confirmation" ;;
+  esac
+}
+
+run_recall_all() {
+  local format="${1:-human}"
+  local threshold="${2:-$RECALL_BITROT_THRESHOLD}"
+  local summary_lines="${3:-0}"
+  local threshold_set="${4:-yes}"
+  local summary_lines_set="${5:-yes}"
+
+  local registry
+  registry="$(recall_registry_path)" || return
+
+  local scanned_count=0 skipped_count=0
+  local active_total=0 stale_total=0
+  local has_run_tests="no" has_refresh="no" has_manual="no"
+  local projects_json="" first_p="yes"
+  local human_scanned="" human_skipped=""
+
+  local projects
+  projects="$(recall_registry_projects "$registry")" || return
+
+  while IFS="$(printf '\t')" read -r pname prepo pdocs pstatus; do
+    [ -n "$pname" ] || continue
+
+    if recall_registry_status_is_inactive "$pstatus"; then
+      skipped_count=$((skipped_count + 1))
+      human_skipped="${human_skipped}- ${pname}  skipped (inactive: ${pstatus})"$'\n'
+      if [ "$first_p" = "no" ]; then projects_json="${projects_json},"; fi
+      projects_json="${projects_json}$(
+        printf '{'
+        printf '"name":'; json_string "$pname"; printf ','
+        printf '"code_repo":'; json_string "$(recall_expand_registry_path "$prepo" 2>/dev/null || printf '%s' "$prepo")"; printf ','
+        printf '"docs_dir":'; json_string "$pdocs"; printf ','
+        printf '"registry_status":'; json_string "$pstatus"; printf ','
+        printf '"status":"skipped","skip_reason":"inactive",'
+        printf '"active_count":0,"stale_count":0,"changes":[]'
+        printf '}'
+      )"
+      first_p="no"
+      continue
+    fi
+
+    # skip: no code repo declared
+    case "$prepo" in
+      ""|"—"|"-"|"–")
+        skipped_count=$((skipped_count + 1))
+        human_skipped="${human_skipped}- ${pname}  skipped (no_code_repo)"$'\n'
+        if [ "$first_p" = "no" ]; then projects_json="${projects_json},"; fi
+        projects_json="${projects_json}$(
+          printf '{'
+          printf '"name":'; json_string "$pname"; printf ','
+          printf '"code_repo":'; json_string ""; printf ','
+          printf '"docs_dir":'; json_string "$pdocs"; printf ','
+          printf '"registry_status":'; json_string "$pstatus"; printf ','
+          printf '"status":"skipped","skip_reason":"no_code_repo",'
+          printf '"active_count":0,"stale_count":0,"changes":[]'
+          printf '}'
+        )"
+        first_p="no"
+        continue
+        ;;
+    esac
+
+    local repo
+    repo="$(recall_expand_registry_path "$prepo")" || {
+      echo "Invalid code_root in registry: $prepo" >&2
+      return 2
+    }
+
+    if [ ! -d "$repo" ]; then
+      skipped_count=$((skipped_count + 1))
+      human_skipped="${human_skipped}- ${pname}  skipped (path_missing: ${prepo})"$'\n'
+      if [ "$first_p" = "no" ]; then projects_json="${projects_json},"; fi
+      projects_json="${projects_json}$(
+        printf '{'
+        printf '"name":'; json_string "$pname"; printf ','
+        printf '"code_repo":'; json_string "$repo"; printf ','
+        printf '"docs_dir":'; json_string "$pdocs"; printf ','
+        printf '"registry_status":'; json_string "$pstatus"; printf ','
+        printf '"status":"skipped","skip_reason":"path_missing",'
+        printf '"active_count":0,"stale_count":0,"changes":[]'
+        printf '}'
+      )"
+      first_p="no"
+      continue
+    fi
+
+    repo="$(cd "$repo" && pwd -P)"
+
+    local p_docs_root p_project_config p_context
+    if [ -n "${ZIMAFLOW_PROJECT_REGISTRY:-}" ]; then
+      if [ -n "$pdocs" ]; then
+        p_docs_root="$(recall_resolve_docs_dir "$repo" "$pdocs")"
+        p_docs_root="$(canonical_path_for_write "$p_docs_root")" || return 2
+      else
+        p_docs_root="$(canonical_path_for_write "$repo/docs/zimaflow")" || return 2
+      fi
+      p_project_config="$repo/.zimaflow/project.yaml"
+    else
+      local p_schema p_resolved_name p_resolved_root p_projects_file p_docs_source p_initialized
+      p_context="$(resolve_project_context "$repo")" || return
+      IFS=$'\t' read -r p_schema p_resolved_name p_resolved_root p_docs_root p_project_config p_projects_file p_docs_source p_initialized <<EOF
+$p_context
+EOF
+    fi
+
+    # scanned project
+    scanned_count=$((scanned_count + 1))
+    local files
+    files="$(state_files "$repo")"
+
+    local p_active=0 p_stale=0
+    local p_threshold="$threshold" p_summary_lines="$summary_lines"
+    local policy_path policy_threshold policy_summary_lines
+    policy_path="$(recall_policy_path "$repo" "$p_docs_root")"
+    policy_threshold="$(recall_policy_count "$policy_path" threshold_days days)"
+    policy_summary_lines="$(recall_policy_count "$policy_path" summary_lines)"
+    if [ "$threshold_set" != "yes" ] && [ -n "$policy_threshold" ]; then
+      p_threshold="$policy_threshold"
+    fi
+    if [ "$summary_lines_set" != "yes" ] && [ -n "$policy_summary_lines" ]; then
+      p_summary_lines="$policy_summary_lines"
+    fi
+    local p_changes_json="" first_c="yes"
+    local p_change_lines=""
+
+    while IFS= read -r file; do
+      [ -n "$file" ] || continue
+      local fallback_change
+      fallback_change="$(state_change_from_path "$repo" "$file")"
+      state_load_or_defaults "$file" "$fallback_change"
+      [ "$STATE_PHASE" = "closed" ] && continue
+      local artifact_ref
+      for artifact_ref in "$STATE_CONTRACT_PATH" "$STATE_DECISION_PATH" "$STATE_PROPOSAL_PATH" "$STATE_DESIGN_PATH" "$STATE_TASKS_PATH" "$STATE_HANDOVER_PATH" "$STATE_EXECUTION_INPUT_PATH"; do
+        [ -z "$artifact_ref" ] || resolve_artifact_path "$repo" "$artifact_ref" "$p_docs_root" >/dev/null || return 2
+      done
+      p_active=$((p_active + 1))
+
+      local br status days reason
+      br="$(recall_bitrot "$p_threshold" "$STATE_VERIFIED_AT" "$STATE_HANDOVER_UPDATED_AT" "$file")"
+      status="$(printf '%s' "$br" | cut -f1)"
+      days="$(printf '%s' "$br" | cut -f2)"
+      reason="$(printf '%s' "$br" | cut -f3)"
+
+      if [ "$status" = "stale" ]; then
+        p_stale=$((p_stale + 1))
+        case "$reason" in
+          verified_at) has_run_tests="yes" ;;
+          handover_updated_at) has_refresh="yes" ;;
+          state_mtime) has_manual="yes" ;;
+        esac
+      fi
+
+      local hint handover_status
+      hint="$(recall_change_hint "$status" "$reason")"
+      handover_status="$(recall_handover_status "$repo" "$STATE_HANDOVER_PATH" "$p_docs_root")" || return
+
+      # Cross-project handover summary is opt-in via --summary-lines (default off).
+      local summary=""
+      if [ "$p_summary_lines" -gt 0 ]; then
+        summary="$(recall_handover_summary "$repo" "$STATE_HANDOVER_PATH" "$p_summary_lines" "$p_docs_root")" || return
+      fi
+
+      if [ "$status" = "stale" ]; then
+        p_change_lines="${p_change_lines}    - ${STATE_CHANGE_ID}  phase=${STATE_PHASE}  stale(${days}d, ${reason})  → ${hint}"$'\n'
+      else
+        p_change_lines="${p_change_lines}    - ${STATE_CHANGE_ID}  phase=${STATE_PHASE}  fresh(${days}d)  → ${hint}"$'\n'
+      fi
+      if [ -n "$summary" ]; then
+        p_change_lines="${p_change_lines}      summary:"$'\n'
+        while IFS= read -r sline; do
+          [ -n "$sline" ] || continue
+          p_change_lines="${p_change_lines}        ${sline}"$'\n'
+        done <<EOF2
+$summary
+EOF2
+      fi
+
+      if [ "$first_c" = "no" ]; then p_changes_json="${p_changes_json},"; fi
+      p_changes_json="${p_changes_json}$(
+        printf '{'
+        printf '"change_id":'; json_string "$STATE_CHANGE_ID"; printf ','
+        printf '"phase":'; json_string "$STATE_PHASE"; printf ','
+        printf '"archive_status":'; json_string "$STATE_ARCHIVE_STATUS"; printf ','
+        printf '"handover_status":'; json_string "$handover_status"; printf ','
+        printf '"handover_path":'; json_string "$STATE_HANDOVER_PATH"; printf ','
+        printf '"handover_updated_at":'; json_string "$STATE_HANDOVER_UPDATED_AT"; printf ','
+        printf '"bit_rot":{"status":'; json_string "$status"; printf ',"stale_days":%s,"reason":' "${days:-0}"; json_string "$reason"; printf '},'
+        printf '"next_hint":'; json_string "$hint"; printf ','
+        printf '"handover_summary":'; json_string_array "$summary"
+        printf '}'
+      )"
+      first_c="no"
+    done <<EOF
+$files
+EOF
+
+    active_total=$((active_total + p_active))
+    stale_total=$((stale_total + p_stale))
+
+    human_scanned="${human_scanned}- ${pname}  (${prepo})"$'\n'
+    human_scanned="${human_scanned}    active=${p_active}  stale=${p_stale}"$'\n'
+    if [ -n "$p_change_lines" ]; then
+      human_scanned="${human_scanned}${p_change_lines}"
+    fi
+
+    if [ "$first_p" = "no" ]; then projects_json="${projects_json},"; fi
+    projects_json="${projects_json}$(
+      printf '{'
+      printf '"name":'; json_string "$pname"; printf ','
+      printf '"code_repo":'; json_string "$repo"; printf ','
+      printf '"docs_dir":'; json_string "$pdocs"; printf ','
+      printf '"docs_root":'; json_string "$p_docs_root"; printf ','
+      printf '"project_config":'; json_string "$p_project_config"; printf ','
+      printf '"registry_status":'; json_string "$pstatus"; printf ','
+      printf '"threshold_days":%s,' "$p_threshold"
+      printf '"summary_lines":%s,' "$p_summary_lines"
+      printf '"status":"scanned","skip_reason":"",'
+      printf '"active_count":%s,"stale_count":%s,' "$p_active" "$p_stale"
+      printf '"changes":[%s]' "$p_changes_json"
+      printf '}'
+    )"
+    first_p="no"
+  done <<EOF
+$projects
+EOF
+
+  local next_action
+  if [ "$active_total" -eq 0 ]; then
+    next_action="no_active_change"
+  elif [ "$has_run_tests" = "yes" ]; then
+    next_action="run_tests"
+  elif [ "$has_refresh" = "yes" ]; then
+    next_action="refresh_handover"
+  elif [ "$has_manual" = "yes" ]; then
+    next_action="need_manual_confirmation"
+  else
+    next_action="continue"
+  fi
+
+  if [ "$format" = "json" ]; then
+    printf '{'
+    printf '"registry_path":'; json_string "$registry"; printf ','
+    printf '"scanned_count":%s,' "$scanned_count"
+    printf '"skipped_count":%s,' "$skipped_count"
+    printf '"projects":[%s],' "$projects_json"
+    printf '"active_total":%s,' "$active_total"
+    printf '"stale_total":%s,' "$stale_total"
+    printf '"bit_rot_summary":{"threshold_days":%s,"stale_total":%s},' "$threshold" "$stale_total"
+    printf '"next_action":'; json_string "$next_action"
+    printf '}\n'
+    return 0
+  fi
+
+  echo "zimaflow recall --all"
+  echo
+  printf 'Registry: %s\n' "$registry"
+  if [ ! -f "$registry" ]; then
+    echo
+    echo "Registry not found."
+    echo "Next action: no active change"
+    return 2
+  fi
+  echo
+  printf 'Projects scanned: %s\n' "$scanned_count"
+  printf 'Projects skipped: %s\n' "$skipped_count"
+  printf 'Active changes total: %s\n' "$active_total"
+  printf 'Stale changes total: %s\n' "$stale_total"
+  echo
+  if [ -n "$human_scanned" ]; then
+    printf '%s' "$human_scanned"
+  fi
+  if [ -n "$human_skipped" ]; then
+    echo
+    printf '%s' "$human_skipped"
+  fi
+  echo
+  echo "Next action: $(recall_human_next_action "$next_action")"
+}
+
+# --- release-check: pre-release readiness soft gate (flow-kit 8-release 前置4问) ---
+# Not a deploy tool: never deploys, never reads release secrets, never blocks.
+
+release_questions_data() {
+  # id<TAB>question ; each requires human confirmation, CLI never answers them.
+  printf '%s\t%s\n' "scope" "本次发布范围是否与已确认 contract / decision / spec 一致？"
+  printf '%s\t%s\n' "verification" "关键测试、全量测试或人工验收是否已完成并记录？"
+  printf '%s\t%s\n' "rollback" "如果发布失败，回滚 / 关闭开关 / 恢复数据的路径是否明确？"
+  printf '%s\t%s\n' "communication" "是否需要通知用户 / 测试 / 运营 / 协作者？若需要，通知内容是否已准备好？"
+}
+
+release_human_next_action() {
+  case "$1" in
+    ready) echo "ready" ;;
+    need_verify) echo "need verify" ;;
+    need_archive) echo "need archive" ;;
+    need_handover) echo "need handover" ;;
+    need_secret_review) echo "need secret review" ;;
+    need_manual_confirmation) echo "need manual confirmation" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+print_release_json() {
+  local repository="$1" git_status="$2" dirty_count="$3" active_count="$4"
+  local active_changes_json="$5" verification_readiness="$6" archive_readiness="$7"
+  local handover_readiness="$8" secrets_readiness="$9" secrets_hits="${10}" next_action="${11}"
+
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"git_status":'; json_string "$git_status"; printf ','
+  printf '"dirty_count":%s,' "$dirty_count"
+  printf '"active_count":%s,' "$active_count"
+  printf '"active_changes":[%s],' "$active_changes_json"
+  printf '"verification_readiness":'; json_string "$verification_readiness"; printf ','
+  printf '"archive_readiness":'; json_string "$archive_readiness"; printf ','
+  printf '"handover_readiness":'; json_string "$handover_readiness"; printf ','
+  printf '"secrets_readiness":'; json_string "$secrets_readiness"; printf ','
+  printf '"secrets_hits":'; json_string_array "$secrets_hits"; printf ','
+  printf '"release_questions":['
+  local first="yes" id question
+  while IFS="$(printf '\t')" read -r id question; do
+    [ -n "$id" ] || continue
+    if [ "$first" = "no" ]; then printf ','; fi
+    printf '{'
+    printf '"id":'; json_string "$id"; printf ','
+    printf '"question":'; json_string "$question"; printf ','
+    printf '"requires_human_confirmation":true'
+    printf '}'
+    first="no"
+  done <<EOF
+$(release_questions_data)
+EOF
+  printf '],'
+  printf '"next_action":'; json_string "$next_action"
+  printf '}\n'
+}
+
+run_release_check() {
+  local format="${1:-human}"
+  local root
+  root="$(find_git_root)"
+  if [ -z "$root" ]; then
+    if [ "$format" = "json" ]; then
+      print_release_json "" "not_git_repo" 0 0 "" "not_checked" "not_checked" "not_checked" "not_checked" "" "need_manual_confirmation"
+      return 2
+    fi
+    echo "zimaflow release-check"
+    echo
+    echo "Not inside a git repository."
+    echo "Next action: need manual confirmation"
+    return 2
+  fi
+
+  local dirty_count
+  dirty_count="$(cd "$root" && git status --porcelain=v1 | wc -l | tr -d ' ')"
+  local git_status="clean"
+  [ "$dirty_count" != "0" ] && git_status="dirty"
+
+  local changed_files
+  changed_files="$(git_changed_files "$root")"
+
+  local state_root
+  if [ -d "openspec/changes" ]; then
+    state_root="$(pwd)"
+  else
+    state_root="$root"
+  fi
+
+  # Secrets scan reuses the shared helper (report-only, never prints values).
+  local secrets_hits secrets_readiness="none_obvious"
+  secrets_hits="$(scan_secrets "$root" "$changed_files" | head -20)"
+  [ -n "$secrets_hits" ] && secrets_readiness="suspected"
+
+  # Walk active changes for verification + handover readiness.
+  local files
+  files="$(state_files "$state_root")"
+  local active_count=0
+  local verify_incomplete="no" handover_missing="no" archive_pending="no"
+  local unarchived_ids=""
+  local active_changes_json="" first="yes"
+
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    local fallback_change
+    fallback_change="$(state_change_from_path "$state_root" "$file")"
+    state_load_or_defaults "$file" "$fallback_change"
+    [ "$STATE_PHASE" = "closed" ] && continue
+    active_count=$((active_count + 1))
+
+    if [ "$STATE_OPSX_VERIFY" != "passed" ] || [ "$STATE_FULL_TESTS" != "passed" ]; then
+      verify_incomplete="yes"
+    fi
+
+    if [ "$STATE_ARCHIVE_STATUS" != "archived" ]; then
+      archive_pending="yes"
+      unarchived_ids="$(printf '%s\n%s' "$unarchived_ids" "$STATE_CHANGE_ID")"
+    fi
+
+    local handover_status
+    handover_status="$(recall_handover_status "$state_root" "$STATE_HANDOVER_PATH")"
+    if [ "$handover_status" != "present" ]; then
+      handover_missing="yes"
+    fi
+
+    if [ "$first" = "no" ]; then active_changes_json="${active_changes_json},"; fi
+    active_changes_json="${active_changes_json}$(
+      printf '{'
+      printf '"change_id":'; json_string "$STATE_CHANGE_ID"; printf ','
+      printf '"phase":'; json_string "$STATE_PHASE"; printf ','
+      printf '"opsx_verify":'; json_string "$STATE_OPSX_VERIFY"; printf ','
+      printf '"full_tests":'; json_string "$STATE_FULL_TESTS"; printf ','
+      printf '"archive_status":'; json_string "$STATE_ARCHIVE_STATUS"; printf ','
+      printf '"handover_status":'; json_string "$handover_status"
+      printf '}'
+    )"
+    first="no"
+  done <<EOF
+$files
+EOF
+
+  # Readiness summaries.
+  local verification_readiness archive_readiness handover_readiness
+  if [ "$active_count" -eq 0 ]; then
+    verification_readiness="no_active_change"
+    handover_readiness="no_active_change"
+  else
+    if [ "$verify_incomplete" = "yes" ]; then verification_readiness="incomplete"; else verification_readiness="ready"; fi
+    if [ "$handover_missing" = "yes" ]; then handover_readiness="missing"; else handover_readiness="ready"; fi
+  fi
+  if [ "$archive_pending" = "yes" ]; then archive_readiness="unarchived_present"; else archive_readiness="ready"; fi
+
+  local unarchived_list
+  unarchived_list="$(printf '%s\n' "$unarchived_ids" | awk 'NF' | paste -sd ', ' -)"
+
+  # Next action priority: secret > verify > archive > handover > dirty(manual) > ready.
+  local next_action="ready"
+  if [ "$secrets_readiness" = "suspected" ]; then
+    next_action="need_secret_review"
+  elif [ "$active_count" -gt 0 ] && [ "$verify_incomplete" = "yes" ]; then
+    next_action="need_verify"
+  elif [ "$archive_pending" = "yes" ]; then
+    next_action="need_archive"
+  elif [ "$active_count" -gt 0 ] && [ "$handover_missing" = "yes" ]; then
+    next_action="need_handover"
+  elif [ "$dirty_count" != "0" ]; then
+    next_action="need_manual_confirmation"
+  fi
+
+  if [ "$format" = "json" ]; then
+    print_release_json "$root" "$git_status" "$dirty_count" "$active_count" "$active_changes_json" "$verification_readiness" "$archive_readiness" "$handover_readiness" "$secrets_readiness" "$secrets_hits" "$next_action"
+    return 0
+  fi
+
+  echo "zimaflow release-check"
+  echo
+  printf 'Repository: %s\n' "$root"
+  echo
+
+  if [ "$git_status" = "clean" ]; then
+    print_status_line "Git status" "clean" ""
+  else
+    print_status_line "Git status" "dirty" "$dirty_count changed file(s); confirm intended for release"
+  fi
+
+  print_status_line "Active changes" "$active_count" ""
+
+  case "$verification_readiness" in
+    ready) print_status_line "Verification readiness" "ready" "" ;;
+    incomplete) print_status_line "Verification readiness" "incomplete" "some active change has opsx_verify / full_tests != passed" ;;
+    *) print_status_line "Verification readiness" "no active change" "" ;;
+  esac
+
+  if [ "$archive_readiness" = "ready" ]; then
+    print_status_line "Archive readiness" "ready" ""
+  else
+    print_status_line "Archive readiness" "unarchived present" "$unarchived_list"
+  fi
+
+  case "$handover_readiness" in
+    ready) print_status_line "Handover readiness" "ready" "" ;;
+    missing) print_status_line "Handover readiness" "missing" "some active change has no handover.latest_path or the file is missing" ;;
+    *) print_status_line "Handover readiness" "no active change" "" ;;
+  esac
+
+  if [ "$secrets_readiness" = "suspected" ]; then
+    print_status_line "Secrets readiness" "suspected" "$(printf '%s' "$secrets_hits" | paste -sd ', ' -); review before release, do not commit real keys"
+  else
+    print_status_line "Secrets readiness" "none obvious" ""
+  fi
+
+  echo
+  echo "Release questions (human confirmation required):"
+  local n=0 id question
+  while IFS="$(printf '\t')" read -r id question; do
+    [ -n "$id" ] || continue
+    n=$((n + 1))
+    printf '  %s. [%s] %s\n' "$n" "$id" "$question"
+  done <<EOF
+$(release_questions_data)
+EOF
+
+  echo
+  echo "Next action: $(release_human_next_action "$next_action")"
+  echo
+  echo "Reminder: release-check is a soft pre-release checklist. It never deploys, never reads release secrets, and never blocks."
+}
+
+install_hook_file() {
+  local hook_path="$1"
+  local mode="$2"
+  local tmp_path="${hook_path}.zimaflow-new"
+
+  if [ -f "$hook_path" ] && grep -q "zimaflow close reminder" "$hook_path" && grep -Fxq 'echo "zimaflow: before closing this AI session, run: zimaflow close" >&2' "$hook_path"; then
+    echo "Already installed: $hook_path"
+    return 0
+  fi
+
+  if [ -f "$hook_path" ] && grep -q "zimaflow close reminder" "$hook_path"; then
+    awk '
+      /# zimaflow close reminder/ {
+        print
+        print "echo \"zimaflow: before closing this AI session, run: zimaflow close\" >&2"
+        in_zimaflow_reminder = 1
+        next
+      }
+      in_zimaflow_reminder && /closing this AI session/ {
+        next
+      }
+      {
+        in_zimaflow_reminder = 0
+        print
+      }
+    ' "$hook_path" > "$tmp_path"
+    mv "$tmp_path" "$hook_path"
+    chmod +x "$hook_path"
+    echo "Updated: $hook_path"
+    return 0
+  fi
+
+  if [ -f "$hook_path" ]; then
+    cp "$hook_path" "${hook_path}.bak"
+  fi
+
+  {
+    if [ -f "$hook_path" ]; then
+      cat "$hook_path"
+      echo
+    else
+      echo "#!/usr/bin/env bash"
+      echo
+    fi
+    cat <<EOF
+# zimaflow close reminder
+echo "zimaflow: before closing this AI session, run: zimaflow close" >&2
+EOF
+    if [ "$mode" = "strict" ]; then
+      cat <<'EOF'
+echo "zimaflow strict mode is reserved for a future release; this hook is reminder-only for now." >&2
+EOF
+    fi
+  } > "$tmp_path"
+
+  mv "$tmp_path" "$hook_path"
+  chmod +x "$hook_path"
+  echo "Installed: $hook_path"
+}
+
+run_install_hooks() {
+  local mode="${1:-reminder}"
+  if [ "$mode" != "reminder" ] && [ "$mode" != "strict" ]; then
+    echo "Unknown install-hooks option: $mode"
+    usage
+    return 2
+  fi
+
+  local root
+  root="$(find_git_root)"
+  if [ -z "$root" ]; then
+    echo "Not inside a git repository."
+    return 2
+  fi
+
+  local hooks_dir="$root/.git/hooks"
+  if [ ! -d "$hooks_dir" ]; then
+    echo "Git hooks directory not found: $hooks_dir"
+    return 2
+  fi
+
+  install_hook_file "$hooks_dir/post-commit" "$mode"
+  install_hook_file "$hooks_dir/pre-push" "$mode"
+
+  if [ "$mode" = "strict" ]; then
+    echo "Strict mode design note: future versions may block pre-push when no recent zimaflow close report exists."
+  else
+    echo "Hooks are reminder-only and do not block git operations."
+  fi
+}
+
+main() {
+  case "${1:-}" in
+    close)
+      if [ "${2:-}" = "--json" ]; then
+        run_close json
+      elif [ -n "${2:-}" ]; then
+        echo "Unknown option: $2"
+        usage
+        return 2
+      else
+        run_close human
+      fi
+      ;;
+    state)
+      if [ "${2:-}" = "--json" ]; then
+        run_state json
+      elif [ "${2:-}" = "init" ]; then
+        run_state_write init "${3:-}" "${@:4}"
+      elif [ "${2:-}" = "update" ]; then
+        run_state_write update "${3:-}" "${@:4}"
+      elif [ -n "${2:-}" ]; then
+        echo "Unknown option: $2"
+        usage
+        return 2
+      else
+        run_state human
+      fi
+      ;;
+    project)
+      run_project "${2:-}" "${@:3}"
+      ;;
+    recall)
+      run_recall "${@:2}"
+      ;;
+    release-check)
+      if [ "${2:-}" = "--json" ]; then
+        run_release_check json
+      elif [ -n "${2:-}" ]; then
+        echo "Unknown option: $2"
+        usage
+        return 2
+      else
+        run_release_check human
+      fi
+      ;;
+    context-check)
+      if [ "${2:-}" = "--json" ]; then
+        run_context_check json
+      elif [ -n "${2:-}" ]; then
+        echo "Unknown option: $2"
+        usage
+        return 2
+      else
+        run_context_check human
+      fi
+      ;;
+    stale-review)
+      run_stale_review "${@:2}"
+      ;;
+    knowledge-record)
+      run_knowledge_record "${@:2}"
+      ;;
+    drift-check)
+      run_drift_check "${2:-}" "${@:3}"
+      ;;
+    execution-input)
+      run_execution_input "${2:-}" "${@:3}"
+      ;;
+    host-profile)
+      run_host_profile "${2:-}" "${@:3}"
+      ;;
+    doctor)
+      run_doctor "${2:-}" "${@:3}"
+      ;;
+    runtime)
+      ZIMAFLOW_RUNTIME_VERSION="$VERSION" "$ZIMAFLOW_BIN_DIR/../scripts/runtime-lifecycle.sh" "${@:2}"
+      ;;
+    install-hooks)
+      if [ "${2:-}" = "--strict" ]; then
+        run_install_hooks strict
+      elif [ -n "${2:-}" ]; then
+        echo "Unknown option: $2"
+        usage
+        return 2
+      else
+        run_install_hooks reminder
+      fi
+      ;;
+    --help|-h|"")
+      usage
+      ;;
+    --version)
+      echo "zimaflow $VERSION"
+      ;;
+    *)
+      echo "Unknown command: $1"
+      usage
+      return 2
+      ;;
+  esac
+}
+
+main "$@"

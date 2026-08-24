@@ -1,0 +1,49 @@
+schema: spec-driven
+
+context: |
+  ## 通用约定
+  - 语言：项目技术栈由项目自身配置或项目文档声明，此处不硬编码
+  - Commit 格式：Conventional Commits（feat/fix/refactor/docs/test/chore）
+  - 分支命名：feat/<name>、fix/<name>、refactor/<name>
+  - 测试：所有新代码必须有对应测试，TDD 优先
+  - 代码风格：遵循项目已有的 lint/format 配置，不引入新规则
+  - 实现隔离：进入 build / 实现阶段前，必须确认使用本轮专用 branch 或 worktree；禁止在 main/master/prod/release 等主干或发布分支直接开发（紧急热修复除外，且必须在收尾记录原因）
+
+  ## 排除范围（全局）
+  - 不修改 CI/CD 配置，除非 spec 明确要求
+  - 不升级依赖版本，除非 spec 明确要求
+  - 不改动与当前 spec 无关的文件
+
+  ## 文档同步
+  - 归档前必须确认 `openspec validate <change-name>` 与全量测试已通过
+  - 每次 archive 后，openspec/specs/ 是项目规范的 single source of truth
+  - 归档后同步更新 INDEX.md 索引（如项目有的话）
+  - 代码中的注释与 spec 描述冲突时，以 spec 为准并同步修正注释
+
+  ## Zimaflow 状态文件
+  - 完整模式的每个 OpenSpec change 应维护 `openspec/changes/<name>/.zimaflow-state.yaml`
+  - state 文件字段和 phase 规则以 zimaflow `references/Design-Zimaflow-State.md` 为准
+  - state 文件只记录机器可读状态，不替代 handover、Decisions、proposal/design/tasks 或用户确认
+
+  ## 产品原型评审
+  - 涉及新页面、新流程、多状态 UI 的需求，可在 OpenSpec 前先走 proto-review
+  - proto-review 输出的 prototype.html / review-notes.md 是评审上下文，不是生产代码
+  - Idea-driven 原型中的 AI 假设必须先经用户确认，才能进入 OpenSpec
+
+rules:
+  proposal:
+    - 必须包含"排除范围"（Non-goals）章节，明确列出本次变更不做什么
+    - 必须包含"风险与依赖"章节
+    - 如涉及前端页面，proposal 中须注明是否需要产品原型评审
+    - 如已完成 proto-review，proposal 必须引用 prototype.html 和 review-notes.md
+
+  design:
+    - 如涉及前端页面且尚无 UI 原型引用（prototype.html、review-notes.md、截图或设计链接），在文档顶部标注 ⚠️ 待补充 UI 原型
+    - 如引用 Idea-driven 原型，必须列出已确认结论和仍待确认问题
+    - 接口变更必须列出请求/响应结构
+    - 架构决策必须说明"选 A 不选 B"的理由
+
+  tasks:
+    - 单个 tasks.md 不超过 15 项；超过时必须拆分为多个变更（changes/）
+    - 每个 task 必须有明确的完成标准（可验证）
+    - task 之间标注依赖顺序

@@ -1,0 +1,8 @@
+{
+  "name": "zimaflow",
+  "owner": { "name": "Zimaflow" },
+  "description": "Zimaflow Marketplace release bundle.",
+  "plugins": [
+    { "name": "zimaflow", "source": "./plugins/claude" }
+  ]
+}

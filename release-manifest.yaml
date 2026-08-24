@@ -1,0 +1,51 @@
+schema_version: 2
+zimaflow_version: 1.22.3
+source_commit: 273892fd4c86d8066846e7c2944ffedc35fe435b
+host_capability_fingerprint: 4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbdde77
+build_id: zimaflow-1.22.3-273892fd4c86d8066846e7c2944ffedc35fe435b
+reproducible_build: true
+promotion: immutable_tested_bundle
+license: MIT
+payload_sha256: bd97c1b41ff64abf1e5861e9f9edb762ba9c44789c052763d60de933f35532ca
+ownership:
+  source: private_zimaflow_repository
+  release_bundle: generated_from_shared_source
+  public_release: promotes_this_bundle_without_rebuild
+constraints:
+  symlinks: forbidden
+  development_machine_paths: forbidden
+  private_runtime_data: forbidden
+license_files:
+  - LICENSE
+  - THIRD_PARTY_NOTICES
+  - plugins/claude/LICENSE
+  - plugins/claude/THIRD_PARTY_NOTICES
+  - plugins/codex/LICENSE
+  - plugins/codex/THIRD_PARTY_NOTICES
+  - runtime/zimaflow/LICENSE
+  - runtime/zimaflow/THIRD_PARTY_NOTICES
+required_executables:
+  - plugins/claude/bin/zimaflow
+  - plugins/claude/runtime/zimaflow/bin/zimaflow
+  - plugins/codex/skills/zimaflow/bin/zimaflow
+  - runtime/zimaflow/bin/zimaflow
+forbidden_path_globs:
+  - .git
+  - tests
+  - installer
+  - rollback
+  - knowledge-usage-ledger.jsonl
+  - projects.yaml
+artifacts:
+  claude:
+    path: plugins/claude
+    sha256: 8a5df68438b0002e3204a6dcf37d9c453c3f746c1a06f2f41d35b9bb39105249
+  codex:
+    path: plugins/codex
+    sha256: bb8a6e54c08796e47e95da43fe59dedf800367076431a3ac79b8c8e561867b53
+  workbuddy:
+    path: adapters/workbuddy
+    sha256: a6e891d4cd506c181967f42a0bf82125e2d0e8051281dedadfed05f6b41d83a3
+  shared_runtime:
+    path: runtime/zimaflow
+    sha256: bcba70a666156e36e18fc25bd4df87c8f4b091677641d304cf83e88c116e6044

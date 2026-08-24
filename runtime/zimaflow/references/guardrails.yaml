@@ -1,0 +1,115 @@
+# Zimaflow Guardrails Catalog
+#
+# Single source for high-risk workflow rules that are reused across Skills.
+# This is a soft-gate catalog: it gives agents stable IDs, triggers, and
+# report shape. It does not introduce default blocking hooks.
+
+version: 0.1
+updated_at: 2026-07-25
+default_enforcement: soft_gate
+
+rules:
+  - id: ZF-GR-001
+    slug: requirement_contract_confirmed
+    title: Requirement contract must be confirmed before downstream planning
+    severity: critical
+    scopes:
+      - sdd-router
+      - requirement-contract
+      - route-decision-recorder
+      - proto-review
+      - task-planning
+      - openspec-superpowers-bridge
+    trigger: A new non-hotfix requirement is about to enter route decision, prototype review, task planning, or OpenSpec without a confirmed brief/PRD.
+    required_action: Stop at requirement-contract, create or confirm the brief/PRD, and pass the confirmed contract path downstream.
+    enforcement: soft_gate
+    report_template: |
+      Guardrail ZF-GR-001 triggered: requirement contract is not confirmed.
+      Current state: <missing / draft / pending confirmation>.
+      Next action: return to requirement-contract before downstream planning.
+
+  - id: ZF-GR-002
+    slug: intent_lock_alignment
+    title: Downstream planning must stay aligned with the intent lock
+    severity: high
+    scopes:
+      - route-decision-recorder
+      - task-planning
+      - openspec-superpowers-bridge
+      - session-close-reconciler
+    trigger: Decision, tasks, or OpenSpec artifacts materially expand, shrink, or redirect the confirmed requirement intent.
+    required_action: Mark the drift, return to requirement-contract when the intent changed, and require user confirmation before treating the new scope as effective.
+    enforcement: soft_gate
+    report_template: |
+      Guardrail ZF-GR-002 triggered: downstream scope may drift from the intent lock.
+      Intent lock: <quote>.
+      Drift: <what changed>.
+      Next action: confirm whether to revise the contract or move the extra scope to later work.
+
+  - id: ZF-GR-003
+    slug: destructive_change_review
+    title: Destructive changes need reference scan and impact explanation
+    severity: high
+    scopes:
+      - spec-compliance-check
+    trigger: Implementation deletes >=5 lines in one function/file, changes a public interface, schema, auth rule, or data write path.
+    required_action: Run grep/git-grep for affected references, summarize callers, compatibility, migration, and rollback before asking the user to decide.
+    enforcement: checklist
+    report_template: |
+      Guardrail ZF-GR-003 triggered: destructive change not fully assessed.
+      Signal: <delete / public interface / schema / auth / write path>.
+      Missing evidence: <reference scan / impact summary / rollback>.
+
+  - id: ZF-GR-004
+    slug: secret_value_never_logged
+    title: Secret values must never be written to reports or handovers
+    severity: critical
+    scopes:
+      - zimaflow-close
+      - session-close-reconciler
+      - handover-manager
+      - release-check
+    trigger: A secrets scan or release readiness check finds api_key, token, secret, password, private_key, or similar sensitive material.
+    required_action: Record only path:line and handling status; never copy the secret value. If a real secret may be in git history, recommend revoke/rotate.
+    enforcement: soft_gate
+    report_template: |
+      Guardrail ZF-GR-004 triggered: sensitive configuration risk.
+      Evidence: <path:line only>.
+      Next action: confirm placeholder/env indirection or revoke/rotate if a real secret was exposed.
+
+  - id: ZF-GR-005
+    slug: analogy_for_search_evidence_for_decision
+    title: Analogy is allowed for search; evidence is required for decisions
+    severity: high
+    scopes:
+      - sdd-router
+      - requirement-contract
+      - task-planning
+      - spec-compliance-check
+      - legacy-project-onboarding
+    trigger: The agent uses semantic similarity or domain analogy to expand requirement scope, interaction behavior, implementation scope, or business rules.
+    required_action: Use analogy only to generate candidate search terms. For scope and implementation decisions, cite contract text, user words, design annotations, code facts, or explicitly labeled assumptions.
+    enforcement: soft_gate
+    report_template: |
+      Guardrail ZF-GR-005 triggered: decision lacks direct evidence.
+      Analogy used for: <search / decision>.
+      Required evidence: <contract / user quote / design annotation / code fact / explicit assumption>.
+
+  - id: ZF-GR-006
+    slug: schema_permission_write_upgrade
+    title: Schema, permission, and data-write changes must upgrade the workflow
+    severity: critical
+    scopes:
+      - sdd-router
+      - requirement-contract
+      - route-decision-recorder
+      - task-planning
+      - spec-compliance-check
+    trigger: A request or implementation changes schema, permission/auth, or data-write behavior, including database structure, DTO/serialization fields, auth rules, role checks, write paths, deletes, batch updates, idempotency keys, or transaction boundaries.
+    required_action: Treat schema, permission/auth, or data-write behavior as a high-risk signal. Route new work to full mode or return existing work to requirement-contract / route-decision-recorder / OpenSpec review before implementation continues.
+    enforcement: soft_gate
+    report_template: |
+      Guardrail ZF-GR-006 triggered: high-risk contract boundary changed.
+      Signal: <schema / permission-auth / data-write>.
+      Current workflow: <light / full / hotfix / already implementing>.
+      Next action: upgrade or return to the affected upstream artifact before continuing.

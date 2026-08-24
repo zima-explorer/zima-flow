@@ -1,0 +1,18 @@
+{
+  "name": "zimaflow",
+  "version": "1.22.3",
+  "description": "Host-agnostic AI coding workflow guidance for Codex.",
+  "author": {
+    "name": "Zimaflow"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "zimaflow",
+    "shortDescription": "Start, continue, and finish coding work with evidence.",
+    "longDescription": "A generated Codex packaging adapter for the zimaflow CLI and shared workflow skills.",
+    "developerName": "Zimaflow",
+    "category": "Developer Tools",
+    "capabilities": ["Skills", "Workflow guidance"],
+    "defaultPrompt": ["开始一个开发任务", "继续上次的变更", "准备结束当前任务"]
+  }
+}

@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 700" role="img" aria-labelledby="title desc">
+  <title id="title">Zimaflow workflow</title>
+  <desc id="desc">A lightweight AI coding workflow: Request / 需求输入; quick · standard · full routing; Implement &amp; verify / 实现与验证; Close &amp; hand over / 收口与交接; and Recall &amp; learn / 续接与经验 for the next request.</desc>
+  <style>
+    .title { fill: #172033; font: 700 32px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .subtitle { fill: #62708a; font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .node { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+    .route { fill: #eff6ff; stroke: #60a5fa; }
+    .implement { fill: #f0fdf4; stroke: #4ade80; }
+    .close { fill: #f5f3ff; stroke: #a78bfa; }
+    .recall { fill: #fff7ed; stroke: #fb923c; }
+    .mode { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; }
+    .label { fill: #172033; font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .label-small { fill: #172033; font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .detail { fill: #62708a; font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .edge { fill: none; stroke: #64748b; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow); }
+    .feedback { fill: none; stroke: #16a34a; stroke-width: 2.5; stroke-dasharray: 8 7; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#feedback-arrow); }
+    .feedback-label { fill: #15803d; font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .outcome { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1.5; }
+    .outcome-label { fill: #334155; font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#64748b"/>
+    </marker>
+    <marker id="feedback-arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="700" rx="28" fill="#ffffff"/>
+  <text class="title" x="60" y="64">A lightweight AI coding workflow</text>
+  <text class="subtitle" x="60" y="94">以改动影响匹配流程强度，把范围、证据与上下文接回同一条链路</text>
+
+  <path class="edge" d="M 215 290 H 275"/>
+  <path class="edge" d="M 460 290 H 515 V 177 H 530"/>
+  <path class="edge" d="M 460 290 H 530"/>
+  <path class="edge" d="M 460 290 H 515 V 405 H 530"/>
+  <path class="edge" d="M 720 177 H 755 V 290 H 790"/>
+  <path class="edge" d="M 720 291 H 790"/>
+  <path class="edge" d="M 720 405 H 755 V 290 H 790"/>
+  <path class="edge" d="M 1010 290 H 1070"/>
+  <path class="edge" d="M 1260 290 H 1300"/>
+
+  <rect class="node" x="60" y="235" width="155" height="110" rx="16"/>
+  <text class="label" x="137.5" y="279" text-anchor="middle">Request</text>
+  <text class="label" x="137.5" y="307" text-anchor="middle">需求输入</text>
+  <text class="detail" x="137.5" y="329" text-anchor="middle">start or continue</text>
+
+  <rect class="node route" x="275" y="225" width="185" height="130" rx="16"/>
+  <text class="label" x="367.5" y="269" text-anchor="middle">Route / 分档</text>
+  <text class="detail" x="367.5" y="298" text-anchor="middle">quick · standard · full</text>
+  <text class="detail" x="367.5" y="321" text-anchor="middle">match process to impact</text>
+
+  <rect class="mode" x="530" y="122" width="190" height="110" rx="14"/>
+  <text class="label-small" x="550" y="155">Quick</text>
+  <text class="detail" x="550" y="180">local change +</text>
+  <text class="detail" x="550" y="201">reproducible check</text>
+
+  <rect class="mode" x="530" y="236" width="190" height="110" rx="14"/>
+  <text class="label-small" x="550" y="269">Standard</text>
+  <text class="detail" x="550" y="294">brief + tasks +</text>
+  <text class="detail" x="550" y="315">TDD</text>
+
+  <rect class="mode" x="530" y="350" width="190" height="110" rx="14"/>
+  <text class="label-small" x="550" y="383">Full</text>
+  <text class="detail" x="550" y="408">contract + OpenSpec +</text>
+  <text class="detail" x="550" y="429">review</text>
+
+  <rect class="node implement" x="790" y="225" width="220" height="130" rx="16"/>
+  <text class="label-small" x="900" y="269" text-anchor="middle">Implement &amp; verify</text>
+  <text class="label-small" x="900" y="293" text-anchor="middle">实现与验证</text>
+  <text class="detail" x="900" y="321" text-anchor="middle">change, test, evidence</text>
+
+  <rect class="node close" x="1070" y="225" width="190" height="130" rx="16"/>
+  <text class="label-small" x="1165" y="269" text-anchor="middle">Close &amp; hand over</text>
+  <text class="label-small" x="1165" y="293" text-anchor="middle">收口与交接</text>
+  <text class="detail" x="1165" y="321" text-anchor="middle">state, next action</text>
+
+  <g aria-label="Recall and learn">
+    <title>Recall &amp; learn / 续接与经验</title>
+    <rect class="node recall" x="1300" y="225" width="120" height="130" rx="16"/>
+    <text class="label-small" x="1360" y="269" text-anchor="middle">Recall &amp; learn</text>
+    <text class="label-small" x="1360" y="293" text-anchor="middle">续接与经验</text>
+    <text class="detail" x="1360" y="321" text-anchor="middle">user lessons</text>
+  </g>
+
+  <path class="feedback" d="M 1360 355 V 500 H 367 V 355"/>
+  <text class="feedback-label" x="865" y="493" text-anchor="middle">next request / 下一次需求</text>
+
+  <rect class="outcome" x="190" y="570" width="275" height="64" rx="14"/>
+  <text class="outcome-label" x="327.5" y="608" text-anchor="middle">Clear scope / 清晰范围</text>
+  <rect class="outcome" x="582" y="570" width="275" height="64" rx="14"/>
+  <text class="outcome-label" x="719.5" y="608" text-anchor="middle">Reviewable evidence / 可复核证据</text>
+  <rect class="outcome" x="974" y="570" width="275" height="64" rx="14"/>
+  <text class="outcome-label" x="1111.5" y="608" text-anchor="middle">Continuity / 跨 session 续接</text>
+</svg>

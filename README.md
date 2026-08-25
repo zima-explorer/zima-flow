@@ -9,11 +9,45 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Zimaflow turns a rough development request into a structured workflow you can
-execute and review. It routes requirements, plans tasks, coordinates OpenSpec
-workflows, checks implementations, preserves session continuity through
-handovers, and captures reusable lessons. It supports Claude Code, Codex, and
-WorkBuddy.
+## Why Zimaflow
+
+AI coding makes implementation faster, but it can leave requirements, key
+decisions, verification, and context scattered across a chat, a branch, and a
+developer's memory. Zimaflow is the workflow layer that reconnects those parts
+into an engineering loop you can execute, review, and resume.
+
+It gives individual developers and small teams three practical benefits:
+
+- **Less avoidable rework:** agree on the goal, scope, and acceptance before
+  implementation begins.
+- **Reviewable evidence:** connect tasks and specifications to implementation
+  checks, rather than treating a chat response as proof that work is done.
+- **Continuity across sessions:** preserve the current state, open questions,
+  and next action in handovers instead of asking a new session to reconstruct
+  the work from scratch.
+
+Zimaflow is not an AI coding agent, a project-management system, or a copy of
+your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
+give their coding capabilities a reliable engineering process.
+
+## How it works
+
+Route the request → agree on a lightweight contract → plan the first slice →
+implement with discipline → verify the result → hand over and close the
+session with reusable lessons.
+
+For a complex change, Zimaflow coordinates OpenSpec for the specification and
+implementation workflow. For a small change, it keeps the evidence and scope
+clear without forcing a heavyweight process.
+
+![Zimaflow workflow](assets/zimaflow-workflow.svg)
+
+## Keep it lightweight
+
+Most requests start with a brief, not a full specification. Zimaflow raises the
+level of process only when a change is complex or risky enough to need it. Its
+gates make important decisions visible for people to review; they do not turn
+every task into a compliance ceremony.
 
 ## Quick start
 

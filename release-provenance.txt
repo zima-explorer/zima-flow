@@ -1,4 +1,4 @@
 zimaflow_version=1.22.4
-source_commit=07da5237d4a26eda50f94c419d176abbbc2e487c
+source_commit=914d506e93c9a5310823c8a8a4f8d099be23c076
 host_capability_fingerprint=4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbdde77
 license=MIT

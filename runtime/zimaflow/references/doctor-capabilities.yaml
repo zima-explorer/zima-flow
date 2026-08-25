@@ -1,0 +1,3 @@
+schema_version: 1
+protocol_version: 1
+logical_capabilities: zimaflow.start,zimaflow.continue,zimaflow.finish,zimaflow.setup,zimaflow.sdd-router,zimaflow.task-planning,zimaflow.legacy-project-onboarding,zimaflow.spec-compliance-check,zimaflow.learn

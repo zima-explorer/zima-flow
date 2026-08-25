@@ -1,0 +1,5 @@
+schema_version: 1
+doctor_contract_schema_version: 1
+source_fingerprint: 4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbdde77
+host_id: claude-code
+packaging_mode: plugin

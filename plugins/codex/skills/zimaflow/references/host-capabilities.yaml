@@ -1,0 +1,38 @@
+schema_version: 1
+core:
+  canonical_source: nested
+  logical_skill_ids: true
+  host_paths_in_core: false
+codex:
+  support_tier: v1
+  evidence_status: official_partial
+  discovery_mode: plugin_managed
+  skill_entry_layout: plugin_managed
+  nested_project_scopes: unknown
+  arbitrary_root_recursion: unknown
+  symlink_entry: unknown
+  packaging_preferred: plugin
+  packaging_fallbacks: direct_source
+  evidence_url: https://help.openai.com/en/articles/20001256-plugins-in-codex/
+workbuddy:
+  support_tier: v1
+  evidence_status: local_verified
+  discovery_mode: recursive_source
+  skill_entry_layout: nested_source
+  nested_project_scopes: true
+  arbitrary_root_recursion: true
+  symlink_entry: true
+  packaging_preferred: direct_source
+  packaging_fallbacks: generated_adapter
+  evidence_url: local-environment
+claude-code:
+  support_tier: experimental
+  evidence_status: official_partial
+  discovery_mode: nested_project_scopes
+  skill_entry_layout: one_level
+  nested_project_scopes: true
+  arbitrary_root_recursion: not_documented
+  symlink_entry: true
+  packaging_preferred: plugin
+  packaging_fallbacks: symlink,generated_flat_adapter
+  evidence_url: https://code.claude.com/docs/en/plugins

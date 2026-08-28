@@ -238,6 +238,15 @@ grep -n '^[[:space:]]*- \[' openspec/changes/<name>/tasks.md
 - `openspec validate <change-name>` 和全量测试通过时：`phase: verified`，写入 `verification`
 - archive 完成后：`phase: archived`，写入 `archive`
 
+archive 不是终态。完成 docs sync、reconciler 与 handover 后，必须使用统一写入端推进状态，再执行最终只读 gate：
+
+```bash
+zimaflow finalize <change-name> --docs-synced --handover <repo:// 或 docs:// 路径> --json
+zimaflow close --json
+```
+
+`finalize` 只有在归档、文档同步和 handover 证据都有效时才把 `archived → closed`；失败时返回明确的 `blocking_reasons` 且不写 state。只有最后一次 `close --json` 返回 `next_action=can_close` 才能宣称实现与 session 已完成。
+
 写入 `verification` 时必须采用 `references/Design-Zimaflow-State.md` 的 **verification evidence** 最小字段：
 
 - `opsx_verify`

@@ -142,9 +142,25 @@ updated_by: "zimaflow"
 | `build_started` | branch/worktree 隔离确认，开始实现 | TDD 执行 |
 | `build_completed` | tasks 已完成，初步测试通过 | verify |
 | `verified` | `openspec validate <change-name>` 和全量测试通过 | archive |
-| `archived` | OpenSpec archive 完成 | docs sync / reconciler |
-| `closed` | docs sync、reconciler、handover 完成 | change 结束 |
+| `archived` | OpenSpec archive 完成 | docs sync / reconciler / handover / `zimaflow finalize` |
+| `closed` | `zimaflow finalize` 已验证 archive、docs sync、handover 证据 | `zimaflow close --json` 最终只读 gate |
 | `blocked` | 连续缺失输入或外部条件阻塞 | 等用户或外部状态改变 |
+
+### Archive → close 状态矩阵
+
+| 物理位置 / phase | archive evidence | docs evidence | handover evidence | 统一动作 | `close --json` 结果 / 原因 |
+|---|---|---|---|---|---|
+| active change / 非 `closed` | `not_archived` | 任意 | 任意 | 先完成 verify 与 OpenSpec archive | `need_archive` / `openspec_change_not_archived`，并按 state 补 `active_state_not_closed` |
+| `archive/` / `archived` | `status=archived` | `docs_synced=false` | 任意 | 同步项目文档，再运行 finalize | `need_finalize` / `archive_state_not_closed`，另有 `archive_docs_not_synced` |
+| `archive/` / `archived` | `status=archived` | `docs_synced=true` | 空或文件不存在 | 生成/修复 handover，再运行 finalize | `need_finalize` / `archive_state_not_closed`；finalize 返回 `handover_missing` 或 `handover_not_found` |
+| `archive/` / `archived` | `status=archived` | `docs_synced=true` | 路径可解析且文件存在 | `zimaflow finalize <change> --json` | finalize 原子推进为 `closed`，`next_action=run_close` |
+| `archive/` / `closed` | `status=archived` | `docs_synced=true` | 路径可解析且文件存在 | `zimaflow close --json` | 其他 gate 也通过时 `can_close`；这是唯一允许宣称完成的结果 |
+| `archive/` / `closed` | 不完整 | 任意 | 任意 | 修复证据后重跑 finalize/close | 对应 `archive_docs_not_synced` 或 finalize 的精确 blocker；不得以 phase 单独宣称完成 |
+| 任意 / 任意 | 唯一 `change_id` 匹配失败 | 任意 | 任意 | 清理重复 state 或提供正确 change id | finalize 返回 `archive_state_not_found` / `archive_state_ambiguous`，不写文件 |
+
+`need_docs_sync` 是兼容的粗粒度 `next_action`；自动化和 Agent 必须读取 `blocking_reasons[]`。生命周期仍停在 archived 时使用 `archive_state_not_closed`，不得把它退化成模糊的 docs 提示。
+
+close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更集”为 session 边界：本轮刚 archive/finalize 的 state 必须参与 gate，未被本轮触碰的历史 archived state 仍由 `zimaflow state` 可见，但不阻断以后每个无关 session。旧 state 顶层若使用 `change`，读取端兼容回退；新写入仍统一使用 `change_id`。
 
 ## 六、写入责任
 
@@ -158,10 +174,11 @@ updated_by: "zimaflow"
 | tasks 完成后 | `openspec-superpowers-bridge` | phase → `build_completed` |
 | verify / full tests 后 | `openspec-superpowers-bridge` 或 Agent | 写入 verification，phase → `verified` |
 | 建立交接基线时 | `zimaflow drift-check --write` | 写入 `artifact_hashes`，不推进 phase |
-| archive 后 | Agent / session-close-reconciler | 写入 archive，phase → `archived` |
-| 收口后 | `session-close-reconciler` / `handover-manager` | 写入 docs sync、handover 路径，phase → `closed` |
+| archive 后 | archive Agent / OpenSpec archive Skill | 写入 archive，phase → `archived`；随后自动进入 session close 流程 |
+| docs/handover 准备 | `session-close-reconciler` / `handover-manager` | 生成证据；通过 `zimaflow finalize` 参数统一写入，不直接把 phase 手写为 `closed` |
+| 收口后 | `zimaflow finalize` | 唯一负责校验并原子推进 `archived → closed`；失败不写 state，重复执行有效 closed state 为幂等 no-op |
 
-v0.1 不要求所有写入都自动化。先要求 Skill 在关键阶段检查并建议更新 state；后续再把写入收敛到 CLI 或脚本，避免多个 Agent 手写 YAML 造成格式漂移。
+除 `archived → closed` 已收敛到 `zimaflow finalize` 外，v0.1 不要求所有 phase transition 自动化。其他阶段仍由 Skill 检查并建议更新 state，避免在没有明确 owner 时扩大写入面。
 
 ### Verification Evidence
 
@@ -198,12 +215,13 @@ v0.1 不要求所有写入都自动化。先要求 Skill 在关键阶段检查�
 | `zimaflow recall --all` | 跨项目：遍历用户级项目配置中的 active 项目，各自读取 `repo://openspec/changes/*/.zimaflow-state.yaml`，汇总 active / stale / skipped；默认不读 handover 摘要，`--summary-lines N` 显式开启 |
 | `zimaflow release-check` | 读取 active change state 的 `verification`（opsx_verify / full_tests）、`archive.status`、`handover.latest_path`，汇总发布前置就绪度（verify / archive / handover / secrets）+ 四问；只读、不 deploy、不读发布 token |
 | `zimaflow state init/update` | 统一创建或更新 state 文件的高频字段，减少多 Agent 手写 YAML 的格式漂移 |
+| `zimaflow finalize` | 在唯一 archived state 上验证 archive/docs/handover 证据，原子推进为 `closed`；失败不写、成功可幂等重跑 |
 | `zimaflow drift-check` | 对比 `artifact_hashes` 与当前文件 hash，发现契约、decision、proposal/design/tasks 是否漂移 |
-| `zimaflow close` | JSON 输出和 human checklist 中增加 active change state 摘要；HEAD 含主规范变更时，以同一 archive commit 中 closed/archived state 的 `docs_synced: true` 确认外部 docs 已同步 |
+| `zimaflow close` | 只读最终 gate；扫描 active 与 archived state，输出粗粒度 `next_action` 和精确 `blocking_reasons[]`；只有 `next_action=can_close` 允许完成表述 |
 
 ## 八、暂不做
 
-- 不做全自动 phase transition。
+- 不做全自动 phase transition；仅 `archived → closed` 由 `zimaflow finalize` 统一自动写入。
 - 不用状态文件替代用户审核；`spec_review_confirmed: true` 只能在用户明确确认后写入。
 - `requirement_contract.intent_lock` 只是对照锚点，不替代契约正文；偏离意图锁时回到 requirement-contract / route-decision / OpenSpec 修订并重新确认。
 - 不把 handover 全文塞进 state。
@@ -218,3 +236,4 @@ v0.1 不要求所有写入都自动化。先要求 Skill 在关键阶段检查�
 4. ✅ 增加 `bin/zimaflow state init/update`，统一写入高频字段，减少多 Agent 手写 YAML 的格式漂移。
 5. ✅ 扩展 `zimaflow close --json`，输出 `active_state_count` 和 `active_state_changes`。
 6. ✅ 增加 `bin/zimaflow drift-check`：给契约、decision、proposal/design/tasks 计算 hash，用于发现漂移，不宣称防篡改。
+7. ✅ 增加 `bin/zimaflow finalize` 与 archived-state discovery：统一 `archived → closed`，并让 `close --json` 以 `blocking_reasons[]` 输出可操作原因。

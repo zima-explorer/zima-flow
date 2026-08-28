@@ -17,7 +17,7 @@ sync_reason: 有意不同步：套件内部子 Skill，由 Zimaflow 主入口路
 
 ## 与 handover-manager 的关系
 
-执行顺序：**session-close-reconciler（含 learn 候选扫描 + knowledge usage review）→ handover-manager → learn 写入确认**
+执行顺序：**session-close-reconciler（含 learn 候选扫描 + knowledge usage review）→ handover-manager → learn 写入确认 → `zimaflow finalize`（如已归档）→ `zimaflow close --json`**
 
 - reconciler 先跑：对账文档完整性，同时判断本轮是否命中 learn 高置信信号，并复核本轮 loaded/applied/challenged 的 knowledge ID
 - handover-manager 后跑：生成交接文档时可以把 reconciler 发现的未补缺口和候选 lesson 记入"遗留与下一步/待沉淀经验"
@@ -45,7 +45,7 @@ reconciler 不替代 handover-manager，它们检查的维度不同：
 - tests passed / verify passed
 - commit 已完成 / push 已完成 / PR 已创建
 
-只有在 reconciler 输出 Closing Checklist，并处理或记录其中的 ❌ 明确缺失、📝 建议补充、🧠 Learn 候选后，AI 才能在 final response 中表达"本轮收口完整"或"本 session 可以完结"。
+reconciler 的 checklist 是文档对账输入，不是最终完成信号。处理或记录其中的 ❌ 明确缺失、📝 建议补充、🧠 Learn 候选，生成 handover 后，如 change 已归档则运行 `zimaflow finalize <change> --docs-synced --handover <path> --json`。最后必须运行 `zimaflow close --json`；只有返回 `next_action=can_close`，AI 才能在 final response 中表达"本轮收口完整"或"本 session 可以完结"。
 
 ## 输入
 
@@ -346,6 +346,7 @@ grep -n '^[[:space:]]*- \[' openspec/changes/<name>/tasks.md
    - `handover.latest_path` 为空，但本轮已经生成或更新 handover → 📝 建议补充。
    - `handover.latest_path` 指向的文件不存在 → ❌ 明确缺失。
    - `phase` 已进入 `verified` / `archived` / `closed`，但 `verification`、`archive` 或 `handover` 关键字段为空 → 📝 建议补充；无法判断是否可恢复时列 ❌。
+   - state 位于 `openspec/changes/archive/`、`archive.status=archived` 且 `phase=archived` → ❌ 明确缺失，原因写 `archive_state_not_closed`；完成 docs sync 和 handover 后运行 `zimaflow finalize`。不要把生命周期未关闭笼统记为 `need_docs_sync`。
 2. 如果存在 `docs://.zimaflow/context-index.yaml`（物理位置由 `zimaflow project show --json` 的 `docs_root` 解析）：
    - `workflow.latest_handover` 与最新 handover 明显不一致 → 📝 建议补充。
    - `workflow.latest_state` 指向不存在的 state 文件 → ❌ 明确缺失。
@@ -576,6 +577,7 @@ grep -n '^[[:space:]]*- \[' openspec/changes/<name>/tasks.md
 - 如果有 🔁 Handover / Cross-Session Continuity 建议补充 → 询问用户是否现在补 state / context-index / handover 指针；明确缺失默认建议先补
 - 如果有 🧷 Intent Lock 建议补充 → 询问用户是否现在补意图锁对照、回到 contract 重新确认，或把超出范围项记入后续迭代；明确缺失默认建议先补
 - 如果全部 ✅ → 告知"本轮收口完整"，继续生成 handover
+- 生成 handover 后执行 finalize（若已归档）与最终 `zimaflow close --json`；在 `next_action=can_close` 前只能说“文档对账通过”，不能宣称 session 完成
 
 用户决策后：
 - 选择"现在补" → 协助补充对应文档，补完后重新跑一次 checklist（可选）
@@ -610,7 +612,7 @@ grep -n '^[[:space:]]*- \[' openspec/changes/<name>/tasks.md
 ## 原则
 
 - **检查不改写**：reconciler 只负责发现缺口并提醒，不替用户改文档。用户说"帮我补"时才动手。
-- **Final Response Gate**：用户说"完成/收尾/本 session 完结"前，必须先运行 reconciler；git clean、tests passed、pushed 只是工程完成信号，不是 zimaflow session 收口完成信号。
+- **Final Response Gate**：用户说"完成/收尾/本 session 完结"前，必须先运行 reconciler、生成/更新 handover、按需运行 `zimaflow finalize`，并以 `zimaflow close --json` 的 `next_action=can_close` 作为唯一机器完成门；git clean、tests passed、pushed 只是工程完成信号。
 - **learn 扫描不写入**：reconciler 只输出候选 lesson，不直接写 lessons。写入必须由 learn Skill 在用户确认后执行。
 - **usage review 不改正文**：reconciler 可以建议补记 ledger，但不能直接修改 lesson 内容、出现次数、级别、deprecated 状态或 Skill 规则。
 - **handover 摘要不是 ledger**：handover 中的 Knowledge Usage 只服务交接；是否已有使用证据，以 `zimaflow knowledge-record` 管理的全局 JSONL 事件及兼容期历史事件为准。

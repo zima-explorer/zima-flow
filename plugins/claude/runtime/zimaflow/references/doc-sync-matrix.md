@@ -19,6 +19,8 @@
 | OpenSpec 路线/切片调整 | `Decisions/` 决策文档 | 必须 | 先更新决策文档，再调整 openspec/changes/ |
 | OpenSpec change 完成并 archive | 项目 `PROGRESS.md` | 必须 | 标记该 change 为已完成 |
 | OpenSpec change 完成并 archive | `openspec/specs/`（自动） | 自动 | archive 命令自动合并，无需手动 |
+| OpenSpec change 已 archive 但 state 未 closed | 项目 closing checklist + handover + `.zimaflow-state.yaml` | 必须 | archive 后自动进入 reconciler / handover / finalize；`archive_state_not_closed` 必须通过 `zimaflow finalize` 解决，不能笼统写成 `need_docs_sync` |
+| archive / finalize / close 完成语义变更 | `openspec-archive-change` + `session-close-reconciler` + `handover-manager` + `Design-Zimaflow-State.md` + zimaflow `README.md` | 必须 | 唯一完成门是 `zimaflow close --json` 返回 `next_action=can_close`；同步状态矩阵、blocker 与命令示例 |
 | spec-compliance-check 全量审查完成（全部 task 完成后） | 项目 `Reviews/` 下的独立 Spec Compliance Report 文件；closing checklist 对应行链接该文件路径 | 必须 | 审查报告必须落盘为独立可链接文件，不能只在 closing 清单里写一行"合规检查：done"；每个 task 后的轻量检查不强制落盘 |
 | OpenSpec tasks 状态漂移（存在 Superpowers plan / 代码改动 / 测试证据，但 `tasks.md` 未勾选或状态滞后） | `openspec/changes/<name>/tasks.md`；同步依据记入 handover"遗留与下一步"或 closing checklist | 必须 | verify/archive 或对外交接前必须标记漂移并由人工确认是否同步，记录同步依据（文件路径 / 测试结果 / handover 记录 / 用户确认）；`openspec-superpowers-bridge` Step 5.5 与 reconciler 只标记，**不自动勾选 tasks.md**、不自动改 spec |
 | Skill / workflow 文件改动 | 所属套件的 `README.md` | 必须 | 更新 Skill 列表、版本记录 |
@@ -48,7 +50,7 @@
 | rewind / 需求纠偏（回退了 contract / Decision / OpenSpec / tasks / implementation） | 被回退产物所在文档（`Requirements/` `PRDs/` `Decisions/` `openspec/changes/`）+ handover"遗留与下一步" | 必须 | 记录"被回退的产物、回退原因、当前有效版本"，避免废弃版本与有效版本混淆；就地修订不新建平行产物 |
 | secrets_scan 命中或敏感配置风险 | handover"遗留与下一步"或 `PROGRESS.md`（**禁止记录密钥值**） | 必须 | 只记命中事实（`path:line`）、处理动作、是否需要 revoke/rotate、是否已补 `.env.example` / `.gitignore`；密钥原文不得写入任何文档 |
 | 准备发布 / 上线 / 发版 / 交付 / 打 tag | handover"遗留与下一步"或 `PROGRESS.md`；建议先跑 `zimaflow release-check` | 必须 | 记录 release-check 的 `next_action`；若非 `ready`，记录缺口类别（verify / archive / handover / secret review / manual confirmation）；四问（scope / verification / rollback / communication）只记"待人工确认 / 已确认"，不替用户回答；**不记录任何发布 token / secret 值** |
-| session 收尾触发词或完成语义变更 | `session-close-reconciler/SKILL.md` + `handover-manager/SKILL.md` + zimaflow `README.md` | 必须 | git clean、tests passed、pushed 只代表工程状态完成；final response 宣布完结前必须先跑 reconciler |
+| session 收尾触发词或完成语义变更 | `session-close-reconciler/SKILL.md` + `handover-manager/SKILL.md` + zimaflow `README.md` | 必须 | git clean、tests passed、pushed 只代表工程状态完成；reconciler/handover 后仍须运行最终 close gate，只有 `next_action=can_close` 才能宣布完结 |
 | zimaflow CLI / hook 能力变更 | zimaflow `README.md` + 对应 `bin/` 或 `scripts/` 文件 | 必须 | CLI 是开源用户入口，必须记录命令、默认行为、是否阻断 git 操作 |
 | CLI / hook 能力变更 | 能力自己的路线与待办记录（如涉及 strict / 阻断模式设计） | 建议 | strict hook、close report、pre-push 阻断等硬 harness 方案可先进入待办，不要求 v1 实现 |
 

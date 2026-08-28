@@ -142,7 +142,9 @@ sync_reason: 有意不同步：套件内部子 Skill，由 Zimaflow 主入口路
 10. **触发 learn Skill 扫描**：回顾本次 session，识别是否有值得沉淀的经验（用户纠正、排错过程、技术决策、重复踩坑等）。如有候选 lessons，在 handover 文档末尾追加 `## 待沉淀经验` 小节，列出候选条目等用户确认
 11. 写入项目文档目录
 12. **写入恢复命令**：在"启动指引"里写清下次 session 的 restore command。当前在代码仓内继续时用 `zimaflow recall`；需要跨目录点名项目时用 `zimaflow recall --project <项目名>`；多项目回看时提示 `zimaflow recall --all`。恢复命令是 session restore entrypoint，不替代 handover 全文。
-13. 告知用户：
+13. **完成 archived → closed**：如果 change 已归档，在项目文档同步完成、handover 文件落盘并回写 state 路径后运行：
+    `zimaflow finalize <change> --docs-synced --handover <repo:// 或 docs:// handover 路径> --json`。若有 `blocking_reasons`，先解决且不得宣称完成。随后运行 `zimaflow close --json`；只有 `next_action=can_close` 才能进入完成回复。
+14. 告知用户：
    > 交接文档已生成：`{文件路径}`
    > 下次在任何工具中说"继续 {项目名} 的 {需求名}"，或先运行 `{restore command}` 即可恢复。
    > （如有待沉淀经验）另外发现 {N} 条值得沉淀的经验，见文档末尾，请确认是否沉淀。
@@ -158,6 +160,8 @@ handover-manager 不能因为 `git status` clean、测试通过、提交完成�
 - 🧠 Learn 候选：只列出候选，不自动写入 lessons；等待用户确认后再交给 learn Skill
 - 🧾 Knowledge Usage：如果本轮有知识使用，handover 必须记录 knowledge ID 和状态；如果 usage ledger 缺事件，写入遗留或待沉淀经验
 - 🛡️ Guardrail 收口：如果本轮涉及 hotfix / rewind / secrets / release，把 reconciler 的核对结果承接进 handover 的"Guardrail 承接"小节（hotfix 24h 待补项、rewind 当前有效产物路径、secrets 处理状态、release readiness next_action 与缺口/四问待确认项）；secrets 和发布 token 只记 `path:line` 或类别，不写原文
+
+Closing Checklist 之后仍需执行机器 gate：归档 change 先运行 `zimaflow finalize`，再运行 `zimaflow close --json`。只有后者返回 `next_action=can_close` 才允许宣称 session 完结；`archive_state_not_closed` 必须通过 finalize 解决，不能归入笼统的 docs sync 提示。
 
 ### 时机 2：工具切换
 
@@ -211,6 +215,7 @@ handover-manager 不能因为 `git status` clean、测试通过、提交完成�
 - **Knowledge Usage 是摘要不是 ledger**：handover 只记录本轮知识使用摘要；如果 reconciler 提示全局 usage ledger 缺事件，必须写入"遗留与下一步"或"待沉淀经验"，等待用户确认后交给 `learn` 通过 `zimaflow knowledge-record` 补记。禁止直接编辑能力根内的兼容期历史 JSONL。
 - **应用或质疑要变成候选**：如果某条 knowledge ID 本轮是 `applied` 或 `challenged`，handover 除了记录表格，还应在 `## 待沉淀经验` 中提示是否补 lesson、修订 lesson 或升级/降级。
 - **工程完成不等于 session 收口完成**：git clean、tests passed、pushed 只是工程信号；final response 宣布 session 完结前，必须先完成 session-close-reconciler 对账。
+- **close JSON 是最终硬门**：archive、reconciler 或 handover 单独完成都不是最终成功；只有 `zimaflow close --json` 的 `next_action=can_close` 允许完成表述。
 - **承接 guardrail 但不代办**：handover 可以记录 hotfix 24h 待补项、rewind 当前有效产物、secrets 需人工确认/安全处理的事项、release readiness 缺口与四问待确认项，作为下一轮待办交接；但 handover 只记录，不代为 revoke/rotate、不改密钥、不写 INCIDENT 正文、不 deploy、不打 tag。
 - **secrets / 发布 token 只记 path:line 或类别**：secrets 命中和 release readiness 的处理状态可以进 handover，但任何情况下都不把密钥、发布 token 原文写入 handover。
 - **context index 不存正文**：handover-manager 只能把最新 handover 逻辑路径和简短状态写回 `docs://.zimaflow/context-index.yaml`，不能复制 handover 正文或验证日志。

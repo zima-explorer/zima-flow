@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.4"
+VERSION="1.22.5"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -10,6 +10,7 @@ zimaflow - lightweight workflow guardrails
 
 Usage:
   zimaflow close [--json]
+  zimaflow finalize <change> [--docs-synced] [--handover PATH] [--json]
   zimaflow state [--json]
   zimaflow state init <change> [options]
   zimaflow state update <change> [options]
@@ -33,6 +34,7 @@ Usage:
 Commands:
   close                 Run a lightweight session close checklist.
   close --json          Emit a stable JSON checklist for agents and tools.
+  finalize              Safely advance one archived change to closed.
   state                 Show per-change .zimaflow-state.yaml summaries.
   state --json          Emit state summaries as JSON.
   state init <change>   Create openspec/changes/<change>/.zimaflow-state.yaml.
@@ -1142,8 +1144,30 @@ state_files() {
   local root="$1"
   local changes_dir="$root/openspec/changes"
   if [ -d "$changes_dir" ]; then
-    find "$changes_dir" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null | sort
+    {
+      find "$changes_dir" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null
+      if [ -d "$changes_dir/archive" ]; then
+        find "$changes_dir/archive" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null
+      fi
+    } | sort
   fi
+}
+
+archived_state_matches() {
+  local root="$1"
+  local change="$2"
+  local archive_root="$root/openspec/changes/archive"
+  local file change_id
+
+  [ -d "$archive_root" ] || return 0
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    change_id="$(yaml_top_value "$file" "change_id")"
+    [ -n "$change_id" ] || change_id="$(yaml_top_value "$file" "change")"
+    [ "$change_id" = "$change" ] && printf '%s\n' "$file"
+  done <<EOF
+$(find "$archive_root" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null | sort)
+EOF
 }
 
 state_change_from_path() {
@@ -1151,6 +1175,9 @@ state_change_from_path() {
   local file="$2"
   local changes_dir="$root/openspec/changes"
   local rel="${file#"$changes_dir"/}"
+  if [ "${rel%%/*}" = "archive" ]; then
+    rel="${rel#archive/}"
+  fi
   printf '%s' "${rel%%/*}"
 }
 
@@ -1162,6 +1189,7 @@ state_record() {
 
   local change_id phase mode archive_status
   change_id="$(yaml_top_value "$file" "change_id")"
+  [ -n "$change_id" ] || change_id="$(yaml_top_value "$file" "change")"
   phase="$(yaml_top_value "$file" "phase")"
   mode="$(yaml_top_value "$file" "mode")"
   archive_status="$(yaml_nested_value "$file" "archive" "status")"
@@ -1268,6 +1296,7 @@ state_load_or_defaults() {
   STATE_CONTRACT_PATH=""
   STATE_CONTRACT_STATUS="confirmed"
   STATE_CONTRACT_CONFIRMED_AT=""
+  STATE_CONTRACT_INTENT_LOCK=""
   STATE_DECISION_PATH=""
   STATE_DECISION_STATUS=""
   STATE_PROTOTYPE_ENABLED="false"
@@ -1309,6 +1338,7 @@ state_load_or_defaults() {
 
   if [ -f "$file" ]; then
     STATE_CHANGE_ID="$(yaml_top_value "$file" "change_id")"
+    [ -n "$STATE_CHANGE_ID" ] || STATE_CHANGE_ID="$(yaml_top_value "$file" "change")"
     [ -n "$STATE_CHANGE_ID" ] || STATE_CHANGE_ID="$change"
     STATE_PHASE="$(yaml_top_value "$file" "phase")"
     [ -n "$STATE_PHASE" ] || STATE_PHASE="unknown"
@@ -1317,6 +1347,7 @@ state_load_or_defaults() {
     STATE_CONTRACT_PATH="$(yaml_nested_value "$file" "requirement_contract" "path")"
     STATE_CONTRACT_STATUS="$(yaml_nested_value "$file" "requirement_contract" "status")"
     STATE_CONTRACT_CONFIRMED_AT="$(yaml_nested_value "$file" "requirement_contract" "confirmed_at")"
+    STATE_CONTRACT_INTENT_LOCK="$(yaml_nested_value "$file" "requirement_contract" "intent_lock")"
     STATE_DECISION_PATH="$(yaml_nested_value "$file" "decision" "path")"
     STATE_DECISION_STATUS="$(yaml_nested_value "$file" "decision" "status")"
     STATE_PROTOTYPE_ENABLED="$(yaml_nested_value "$file" "prototype" "enabled")"
@@ -1373,12 +1404,22 @@ state_load_or_defaults() {
   [ -n "$STATE_EXECUTION_INPUT_STATUS" ] || STATE_EXECUTION_INPUT_STATUS="not_applicable"
 }
 
+state_write_scalar() {
+  local indent="$1" key="$2" value="$3"
+  if [ -n "$value" ]; then
+    printf '%s%s: %s\n' "$indent" "$key" "$value"
+  else
+    printf '%s%s:\n' "$indent" "$key"
+  fi
+}
+
 state_write_file() {
   local file="$1"
-  local updated_at
+  local updated_at temp_file
   updated_at="$(now_iso)"
 
   mkdir -p "$(dirname "$file")"
+  temp_file="$(mktemp "$(dirname "$file")/.zimaflow-state.XXXXXX")" || return 2
   {
     printf 'schema_version: 1\n'
     printf 'change_id: %s\n' "$STATE_CHANGE_ID"
@@ -1386,69 +1427,81 @@ state_write_file() {
     printf 'mode: %s\n' "$STATE_MODE"
     printf '\n'
     printf 'requirement_contract:\n'
-    printf '  path: %s\n' "$STATE_CONTRACT_PATH"
+    state_write_scalar '  ' path "$STATE_CONTRACT_PATH"
     printf '  status: %s\n' "$STATE_CONTRACT_STATUS"
-    printf '  confirmed_at: %s\n' "$STATE_CONTRACT_CONFIRMED_AT"
+    state_write_scalar '  ' confirmed_at "$STATE_CONTRACT_CONFIRMED_AT"
+    state_write_scalar '  ' intent_lock "$STATE_CONTRACT_INTENT_LOCK"
     printf '\n'
     printf 'decision:\n'
-    printf '  path: %s\n' "$STATE_DECISION_PATH"
+    state_write_scalar '  ' path "$STATE_DECISION_PATH"
     printf '  status: %s\n' "$STATE_DECISION_STATUS"
     printf '\n'
     printf 'prototype:\n'
     printf '  enabled: %s\n' "$STATE_PROTOTYPE_ENABLED"
-    printf '  prototype_path: %s\n' "$STATE_PROTOTYPE_PATH"
-    printf '  review_notes_path: %s\n' "$STATE_REVIEW_NOTES_PATH"
+    state_write_scalar '  ' prototype_path "$STATE_PROTOTYPE_PATH"
+    state_write_scalar '  ' review_notes_path "$STATE_REVIEW_NOTES_PATH"
     printf '  status: %s\n' "$STATE_PROTOTYPE_STATUS"
     printf '\n'
     printf 'openspec:\n'
-    printf '  change_path: %s\n' "$STATE_CHANGE_PATH"
-    printf '  proposal_path: %s\n' "$STATE_PROPOSAL_PATH"
-    printf '  design_path: %s\n' "$STATE_DESIGN_PATH"
-    printf '  tasks_path: %s\n' "$STATE_TASKS_PATH"
+    state_write_scalar '  ' change_path "$STATE_CHANGE_PATH"
+    state_write_scalar '  ' proposal_path "$STATE_PROPOSAL_PATH"
+    state_write_scalar '  ' design_path "$STATE_DESIGN_PATH"
+    state_write_scalar '  ' tasks_path "$STATE_TASKS_PATH"
     printf '  spec_review_confirmed: %s\n' "$STATE_SPEC_REVIEW_CONFIRMED"
-    printf '  spec_review_confirmed_at: %s\n' "$STATE_SPEC_REVIEW_CONFIRMED_AT"
+    state_write_scalar '  ' spec_review_confirmed_at "$STATE_SPEC_REVIEW_CONFIRMED_AT"
     printf '\n'
     printf 'implementation:\n'
-    printf '  isolation: %s\n' "$STATE_ISOLATION"
-    printf '  branch: %s\n' "$STATE_BRANCH"
-    printf '  worktree_path: %s\n' "$STATE_WORKTREE_PATH"
-    printf '  started_at: %s\n' "$STATE_STARTED_AT"
-    printf '  completed_at: %s\n' "$STATE_COMPLETED_AT"
+    state_write_scalar '  ' isolation "$STATE_ISOLATION"
+    state_write_scalar '  ' branch "$STATE_BRANCH"
+    state_write_scalar '  ' worktree_path "$STATE_WORKTREE_PATH"
+    state_write_scalar '  ' started_at "$STATE_STARTED_AT"
+    state_write_scalar '  ' completed_at "$STATE_COMPLETED_AT"
     printf '\n'
     printf 'verification:\n'
     printf '  opsx_verify: %s\n' "$STATE_OPSX_VERIFY"
     printf '  full_tests: %s\n' "$STATE_FULL_TESTS"
-    printf '  last_command: %s\n' "$STATE_LAST_COMMAND"
-    printf '  last_result: %s\n' "$STATE_LAST_RESULT"
-    printf '  evidence_path: %s\n' "$STATE_EVIDENCE_PATH"
-    printf '  blocked_reason: %s\n' "$STATE_BLOCKED_REASON"
-    printf '  verified_at: %s\n' "$STATE_VERIFIED_AT"
+    state_write_scalar '  ' last_command "$STATE_LAST_COMMAND"
+    state_write_scalar '  ' last_result "$STATE_LAST_RESULT"
+    state_write_scalar '  ' evidence_path "$STATE_EVIDENCE_PATH"
+    state_write_scalar '  ' blocked_reason "$STATE_BLOCKED_REASON"
+    state_write_scalar '  ' verified_at "$STATE_VERIFIED_AT"
     printf '\n'
     printf 'archive:\n'
     printf '  status: %s\n' "$STATE_ARCHIVE_STATUS"
-    printf '  archived_at: %s\n' "$STATE_ARCHIVED_AT"
+    state_write_scalar '  ' archived_at "$STATE_ARCHIVED_AT"
     printf '  docs_synced: %s\n' "$STATE_DOCS_SYNCED"
     printf '\n'
     printf 'handover:\n'
-    printf '  latest_path: %s\n' "$STATE_HANDOVER_PATH"
-    printf '  updated_at: %s\n' "$STATE_HANDOVER_UPDATED_AT"
+    state_write_scalar '  ' latest_path "$STATE_HANDOVER_PATH"
+    state_write_scalar '  ' updated_at "$STATE_HANDOVER_UPDATED_AT"
     printf '\n'
     printf 'artifact_hashes:\n'
-    printf '  contract: %s\n' "$STATE_HASH_CONTRACT"
-    printf '  decision: %s\n' "$STATE_HASH_DECISION"
-    printf '  proposal: %s\n' "$STATE_HASH_PROPOSAL"
-    printf '  design: %s\n' "$STATE_HASH_DESIGN"
-    printf '  tasks: %s\n' "$STATE_HASH_TASKS"
+    state_write_scalar '  ' contract "$STATE_HASH_CONTRACT"
+    state_write_scalar '  ' decision "$STATE_HASH_DECISION"
+    state_write_scalar '  ' proposal "$STATE_HASH_PROPOSAL"
+    state_write_scalar '  ' design "$STATE_HASH_DESIGN"
+    state_write_scalar '  ' tasks "$STATE_HASH_TASKS"
     printf '\n'
     printf 'execution_input:\n'
-    printf '  path: %s\n' "$STATE_EXECUTION_INPUT_PATH"
+    state_write_scalar '  ' path "$STATE_EXECUTION_INPUT_PATH"
     printf '  status: %s\n' "$STATE_EXECUTION_INPUT_STATUS"
-    printf '  generated_at: %s\n' "$STATE_EXECUTION_INPUT_GENERATED_AT"
-    printf '  confirmed_at: %s\n' "$STATE_EXECUTION_INPUT_CONFIRMED_AT"
+    state_write_scalar '  ' generated_at "$STATE_EXECUTION_INPUT_GENERATED_AT"
+    state_write_scalar '  ' confirmed_at "$STATE_EXECUTION_INPUT_CONFIRMED_AT"
     printf '\n'
     printf 'updated_at: %s\n' "$updated_at"
     printf 'updated_by: zimaflow\n'
-  } > "$file"
+  } > "$temp_file" || {
+    rm -f "$temp_file"
+    return 2
+  }
+  chmod 0644 "$temp_file" || {
+    rm -f "$temp_file"
+    return 2
+  }
+  mv "$temp_file" "$file" || {
+    rm -f "$temp_file"
+    return 2
+  }
 }
 
 state_records() {
@@ -1899,8 +1952,10 @@ git_changed_files() {
   (
     cd "$root" || exit 1
     {
-      git status --porcelain=v1 | sed 's/^...//'
-      git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null
+      git diff --name-only --relative 2>/dev/null
+      git diff --cached --name-only --relative 2>/dev/null
+      git ls-files --others --exclude-standard 2>/dev/null
+      git diff-tree --root --no-commit-id --name-only -r HEAD 2>/dev/null
     } | awk 'NF' | sort -u
   )
 }
@@ -1920,7 +1975,7 @@ archive_docs_sync_confirmed() {
         phase="$(yaml_top_value "$state_file" "phase")"
         archive_status="$(yaml_nested_value "$state_file" "archive" "status")"
         docs_synced="$(yaml_nested_value "$state_file" "archive" "docs_synced")"
-        [ "$phase" = "closed" ] \
+        { [ "$phase" = "archived" ] || [ "$phase" = "closed" ]; } \
           && [ "$archive_status" = "archived" ] \
           && [ "$docs_synced" = "true" ] \
           || return 1
@@ -2138,9 +2193,133 @@ print_status_line() {
   fi
 }
 
+append_blocking_reason() {
+  local reason="$1"
+  if [ -z "${BLOCKING_REASONS:-}" ]; then
+    BLOCKING_REASONS="$reason"
+  elif ! printf '%s\n' "$BLOCKING_REASONS" | grep -Fqx "$reason"; then
+    BLOCKING_REASONS="$BLOCKING_REASONS
+$reason"
+  fi
+}
+
+print_finalize_json() {
+  local repository="$1" change_id="$2" state_path="$3" previous_phase="$4"
+  local phase="$5" changed="$6" blocking_reasons="$7" next_action="$8"
+  printf '{'
+  printf '"repository":'; json_string "$repository"; printf ','
+  printf '"change_id":'; json_string "$change_id"; printf ','
+  printf '"state_path":'; json_string "$state_path"; printf ','
+  printf '"previous_phase":'; json_string "$previous_phase"; printf ','
+  printf '"phase":'; json_string "$phase"; printf ','
+  printf '"changed":%s,' "$changed"
+  printf '"blocking_reasons":'; json_string_array "$blocking_reasons"; printf ','
+  printf '"next_action":'; json_string "$next_action"
+  printf '}\n'
+}
+
+run_finalize() {
+  local change="${1:-}"
+  shift || true
+  validate_change_id "$change" || return 2
+
+  local format="human" docs_synced_override="false" handover_override=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json) format="json"; shift ;;
+      --docs-synced) docs_synced_override="true"; shift ;;
+      --handover)
+        [ "${2:-}" ] || { echo "Missing value for --handover" >&2; return 2; }
+        handover_override="$2"; shift 2 ;;
+      *) echo "Unknown finalize option: $1" >&2; return 2 ;;
+    esac
+  done
+
+  local root matches match_count file="" previous_phase="" phase="unknown"
+  root="$(find_state_root)"
+  [ -n "$root" ] || { echo "Not inside a git repository." >&2; return 2; }
+  root="$(cd "$root" && pwd -P)"
+  matches="$(archived_state_matches "$root" "$change")"
+  match_count="$(printf '%s\n' "$matches" | awk 'NF { count++ } END { print count + 0 }')"
+  BLOCKING_REASONS=""
+
+  if [ "$match_count" = "0" ]; then
+    append_blocking_reason "archive_state_not_found"
+  elif [ "$match_count" != "1" ]; then
+    append_blocking_reason "archive_state_ambiguous"
+  else
+    file="$matches"
+    state_load_or_defaults "$file" "$change"
+    previous_phase="$STATE_PHASE"
+    phase="$STATE_PHASE"
+
+    [ "$STATE_ARCHIVE_STATUS" = "archived" ] || append_blocking_reason "archive_status_not_archived"
+    case "$STATE_PHASE" in archived|closed) ;; *) append_blocking_reason "archive_phase_invalid" ;; esac
+
+    [ "$docs_synced_override" = "true" ] && STATE_DOCS_SYNCED="true"
+    if [ -n "$handover_override" ]; then
+      STATE_HANDOVER_PATH="$handover_override"
+      STATE_HANDOVER_UPDATED_AT="$(now_iso)"
+    fi
+    [ "$STATE_DOCS_SYNCED" = "true" ] || append_blocking_reason "archive_docs_not_synced"
+
+    if [ -z "$STATE_HANDOVER_PATH" ]; then
+      append_blocking_reason "handover_missing"
+    else
+      local context schema project_name code_root docs_root project_config projects_file docs_root_source initialized
+      local resolved_handover=""
+      context="$(resolve_project_context "$root")" || append_blocking_reason "project_context_invalid"
+      if [ -n "$context" ]; then
+        IFS=$'\t' read -r schema project_name code_root docs_root project_config projects_file docs_root_source initialized <<EOF
+$context
+EOF
+        resolved_handover="$(resolve_artifact_path "$root" "$STATE_HANDOVER_PATH" "$docs_root" 2>/dev/null)" \
+          || append_blocking_reason "handover_path_invalid"
+        if [ -n "$resolved_handover" ] && [ ! -f "$resolved_handover" ]; then
+          append_blocking_reason "handover_not_found"
+        fi
+      fi
+    fi
+  fi
+
+  if [ -n "$BLOCKING_REASONS" ]; then
+    if [ "$format" = "json" ]; then
+      print_finalize_json "$root" "$change" "$file" "$previous_phase" "$phase" false "$BLOCKING_REASONS" "resolve_blockers"
+    else
+      echo "Zimaflow finalize"
+      echo
+      printf 'Change: %s\n' "$change"
+      print_status_line "Finalization" "blocked" "$(printf '%s' "$BLOCKING_REASONS" | paste -sd ', ' -)"
+      echo "Next action: resolve blockers"
+    fi
+    return 2
+  fi
+
+  local changed="false"
+  if [ "$STATE_PHASE" != "closed" ] \
+    || [ "$docs_synced_override" = "true" ] \
+    || [ -n "$handover_override" ]; then
+    STATE_PHASE="closed"
+    phase="closed"
+    state_write_file "$file" || return 2
+    changed="true"
+  fi
+
+  if [ "$format" = "json" ]; then
+    print_finalize_json "$root" "$change" "$file" "$previous_phase" "closed" "$changed" "" "run_close"
+  else
+    echo "Zimaflow finalize"
+    echo
+    printf 'Change: %s\nState: %s\n' "$change" "$file"
+    print_status_line "Finalization" "closed" "changed=$changed"
+    echo "Next action: zimaflow close --json"
+  fi
+}
+
 human_next_action() {
   case "$1" in
     can_close) echo "can close" ;;
+    need_finalize) echo "need finalize" ;;
     need_docs_sync) echo "need docs sync" ;;
     need_archive) echo "need archive" ;;
     need_manual_confirmation) echo "need manual confirmation" ;;
@@ -2161,6 +2340,7 @@ print_close_json() {
   local next_action="${10}"
   local secrets_scan="${11}"
   local secrets_hits="${12}"
+  local blocking_reasons="${13}"
 
   printf '{'
   printf '"repository":'; json_string "$repository"; printf ','
@@ -2174,6 +2354,7 @@ print_close_json() {
   printf '"secrets_hits":'; json_string_array "$secrets_hits"; printf ','
   printf '"active_state_count":%s,' "$active_state_count"
   printf '"active_state_changes":'; json_string_array "$active_state_changes"; printf ','
+  printf '"blocking_reasons":'; json_string_array "$blocking_reasons"; printf ','
   printf '"next_action":'; json_string "$next_action"
   printf '}\n'
 }
@@ -2184,7 +2365,7 @@ run_close() {
   root="$(find_git_root)"
   if [ -z "$root" ]; then
     if [ "$format" = "json" ]; then
-      print_close_json "" "not_git_repo" 0 "" "not_checked" "not_checked" "not_checked" 0 "" "need_manual_confirmation" "not_checked" ""
+      print_close_json "" "not_git_repo" 0 "" "not_checked" "not_checked" "not_checked" 0 "" "need_manual_confirmation" "not_checked" "" "not_git_repository"
       return 2
     fi
     echo "zimaflow close"
@@ -2213,22 +2394,55 @@ run_close() {
 
   local state_root
   if [ -d "openspec/changes" ]; then
-    state_root="$(pwd)"
+    state_root="$(pwd -P)"
   else
     state_root="$root"
   fi
 
-  local state_records_value
-  state_records_value="$(state_records "$state_root")"
+  local all_state_records state_records_value
+  all_state_records="$(state_records "$state_root")"
+  state_records_value=""
+  if [ -n "$all_state_records" ]; then
+    local record_change record_phase record_mode record_archive_status record_file record_relative
+    while IFS=$'\t' read -r record_change record_phase record_mode record_archive_status record_file; do
+      [ -n "$record_file" ] || continue
+      case "$record_file" in
+        "$state_root/openspec/changes/archive/"*)
+          record_relative="${record_file#"$root"/}"
+          printf '%s\n' "$changed_files" | grep -Fqx "$record_relative" || continue
+          ;;
+      esac
+      if [ -n "$state_records_value" ]; then
+        state_records_value="$state_records_value
+$record_change	$record_phase	$record_mode	$record_archive_status	$record_file"
+      else
+        state_records_value="$record_change	$record_phase	$record_mode	$record_archive_status	$record_file"
+      fi
+    done <<EOF
+$all_state_records
+EOF
+  fi
 
   local active_state_count
   active_state_count="$(printf '%s\n' "$state_records_value" | state_active_count)"
 
   local active_state_changes=""
+  local archived_unclosed_changes=""
+  local other_unclosed_changes=""
   if [ -n "$state_records_value" ]; then
     active_state_changes="$(
       printf '%s\n' "$state_records_value" \
         | awk -F '\t' 'NF && $2 != "closed" { print $1 }' \
+        | sort
+    )"
+    archived_unclosed_changes="$(
+      printf '%s\n' "$state_records_value" \
+        | awk -F '\t' 'NF && $2 != "closed" && $4 == "archived" && $5 ~ /\/openspec\/changes\/archive\// { print $1 }' \
+        | sort
+    )"
+    other_unclosed_changes="$(
+      printf '%s\n' "$state_records_value" \
+        | awk -F '\t' 'NF && $2 != "closed" && !($4 == "archived" && $5 ~ /\/openspec\/changes\/archive\//) { print $1 }' \
         | sort
     )"
   fi
@@ -2270,24 +2484,34 @@ run_close() {
   local docs_sync_gap="none_obvious"
   local learn_candidate_scan="none_obvious"
   local next_action="can_close"
+  BLOCKING_REASONS=""
 
   if [ "$dirty_count" != "0" ]; then
     git_status="dirty"
     next_action="need_manual_confirmation"
+    append_blocking_reason "working_tree_dirty"
   fi
 
   if [ -n "$unarchived_changes" ]; then
     next_action="need_archive"
+    append_blocking_reason "openspec_change_not_archived"
   fi
 
-  if [ "$active_state_count" != "0" ]; then
-    if [ "$next_action" = "can_close" ]; then
-      next_action="need_manual_confirmation"
-    fi
+  if [ -n "$archived_unclosed_changes" ]; then
+    next_action="need_finalize"
+    append_blocking_reason "archive_state_not_closed"
+  fi
+
+  if [ -n "$other_unclosed_changes" ]; then
+    [ "$next_action" = "can_close" ] && next_action="need_manual_confirmation"
+    append_blocking_reason "active_state_not_closed"
   fi
 
   if [ "$archive_signal" = "possible" ] && [ "$next_action" = "can_close" ]; then
     next_action="need_docs_sync"
+    append_blocking_reason "archive_docs_not_synced"
+  elif [ "$archive_signal" = "possible" ]; then
+    append_blocking_reason "archive_docs_not_synced"
   fi
 
   if [ "$code_signal" = "yes" ] && [ "$docs_signal" = "no" ]; then
@@ -2295,24 +2519,23 @@ run_close() {
     if [ "$next_action" = "can_close" ]; then
       next_action="need_docs_sync"
     fi
+    append_blocking_reason "documentation_sync_not_confirmed"
   elif [ "$docs_signal" = "yes" ]; then
     docs_sync_gap="docs_touched"
   fi
 
   if [ "$workflow_signal" = "yes" ]; then
     learn_candidate_scan="recommended"
-    if [ "$next_action" = "can_close" ]; then
-      next_action="need_manual_confirmation"
-    fi
   fi
 
   # Suspected secrets take top priority: always require manual confirmation.
   if [ "$secrets_scan" = "suspected" ]; then
     next_action="need_manual_confirmation"
+    append_blocking_reason "suspected_secret"
   fi
 
   if [ "$format" = "json" ]; then
-    print_close_json "$root" "$git_status" "$dirty_count" "$unarchived_changes" "$archive_signal" "$docs_sync_gap" "$learn_candidate_scan" "$active_state_count" "$active_state_changes" "$next_action" "$secrets_scan" "$secrets_hits"
+    print_close_json "$root" "$git_status" "$dirty_count" "$unarchived_changes" "$archive_signal" "$docs_sync_gap" "$learn_candidate_scan" "$active_state_count" "$active_state_changes" "$next_action" "$secrets_scan" "$secrets_hits" "$BLOCKING_REASONS"
     return 0
   fi
 
@@ -2365,6 +2588,12 @@ run_close() {
     print_status_line "Secrets scan" "suspected" "$(printf '%s' "$secrets_hits" | paste -sd ', ' -); review before closing, do not commit real keys (use .env + .gitignore)"
   else
     print_status_line "Secrets scan" "none obvious" ""
+  fi
+
+  if [ -n "$BLOCKING_REASONS" ]; then
+    print_status_line "Blocking reasons" "found" "$(printf '%s' "$BLOCKING_REASONS" | paste -sd ', ' -)"
+  else
+    print_status_line "Blocking reasons" "none" ""
   fi
 
   echo
@@ -4184,6 +4413,9 @@ main() {
       else
         run_close human
       fi
+      ;;
+    finalize)
+      run_finalize "${2:-}" "${@:3}"
       ;;
     state)
       if [ "${2:-}" = "--json" ]; then

@@ -3,7 +3,7 @@ name: openspec-archive-change
 description: Archive a completed change in the experimental workflow. Use when
   the user wants to finalize and archive a change after implementation is
   complete.
-allowed-tools: Bash(openspec:*)
+allowed-tools: Bash(openspec:*), Bash(zimaflow:*)
 license: MIT
 compatibility: Requires openspec CLI.
 metadata:
@@ -88,7 +88,33 @@ Archive a completed change in the experimental workflow.
    mv "<changeRoot>" "<planningHome.changesDir>/archive/YYYY-MM-DD-<name>"
    ```
 
-6. **Display summary**
+6. **Enter Zimaflow session close (mandatory)**
+
+   Moving the change into `archive/` is not session completion. Immediately
+   continue into the close workflow:
+
+   1. Update the moved `.zimaflow-state.yaml` to `phase: archived` and
+      `archive.status: archived` while preserving the original `change_id`.
+   2. Run `session-close-reconciler`, synchronize the required project docs,
+      and create/update the handover through `handover-manager`.
+   3. Record the evidence with one atomic command:
+
+      ```bash
+      zimaflow finalize "<name>" --docs-synced --handover "<repo:// or docs:// handover path>" --json
+      ```
+
+   4. If finalize returns blockers, resolve them and rerun it. Do not edit
+      generated runtime/cache copies and do not claim the session is complete.
+   5. Run the final read-only gate:
+
+      ```bash
+      zimaflow close --json
+      ```
+
+   Only `next_action: can_close` permits completion language. `need_finalize`
+   with `archive_state_not_closed` means archive succeeded but closeout did not.
+
+7. **Display summary**
 
    Show archive completion summary including:
    - Change name
@@ -100,7 +126,7 @@ Archive a completed change in the experimental workflow.
 **Output On Success**
 
 ```
-## Archive Complete
+## Archive and Session Close Complete
 
 **Change:** <change-name>
 **Schema:** <schema-name>
@@ -108,6 +134,7 @@ Archive a completed change in the experimental workflow.
 **Specs:** ✓ Synced to main specs (or "No delta specs" or "Sync skipped")
 
 All artifacts complete. All tasks complete.
+Final close gate: `next_action=can_close`.
 ```
 
 **Guardrails**
@@ -118,3 +145,5 @@ All artifacts complete. All tasks complete.
 - Show clear summary of what happened
 - If sync is requested, use openspec-sync-specs approach (agent-driven)
 - If delta specs exist, always run the sync assessment and show the combined summary before prompting
+- Archive success automatically enters reconciler → handover → finalize → close; it is never the terminal success condition
+- Never say "complete", "finished", or an equivalent unless `zimaflow close --json` returned `next_action: can_close`

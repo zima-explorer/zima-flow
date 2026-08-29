@@ -52,7 +52,7 @@ every task into a compliance ceremony.
 ## Quick start
 
 Install the CLI for the host you use before adding Zimaflow. This checkout
-contains Zimaflow 1.22.5.
+contains Zimaflow 1.22.6.
 
 Claude Code:
 

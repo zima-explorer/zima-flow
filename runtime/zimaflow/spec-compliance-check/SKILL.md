@@ -189,6 +189,24 @@ catalog 是单一真源，用来统一规则 ID、触发条件和报告措辞；
 - [ ] 有验证证据不足 → 由用户决定补证据还是接受风险（soft check，不阻断）
 ```
 
+### Step 5.1：审核未通过时输出下一轮 Execution Brief
+
+当 Step 5 结论不是“全部通过”，且问题仍可在已确认 contract / Decision / OpenSpec 范围内修复时：
+
+1. 读取 `<zimaflow-root>/references/Reviewer-Executor-Loop.md`。
+2. 若 state 未启用 `reviewer_executor` profile，保留原有只读审查与 Brief 输出行为，不要求 matrix/receipts，不写 loop state。
+3. 若 profile 已启用，先确认 executor 已通过 `review-ready` gate；checkpoint 或普通测试失败不能触发 reviewer decision。gate 必须已经从当前 delta-spec 全集、精确 `diff_base..HEAD`、Report 的逐项 `repo://` 链接、commit/source-tree receipts、evidence-only dirty set 和一致 event/state history 派生事实；不得把关键词、目录链接或单份过期回执当成完成。以当前 objective、round、boundary matrix、structured receipts、Execution Report 和项目真源做语义审核。
+4. 对每个有效 finding 运行 `record-finding`，使用稳定 `defect-class`、`boundary`、`requirement` ID；不得填写 recurrence count。feedback 只描述 objective / requirement / boundary / invariant / evidence gap，不给逐函数、逐文件或顺序补丁指令。
+5. 审核未通过时，把结构化 feedback 落在当前仓 validation 目录并运行 `review-decision --decision changes-requested --feedback <path>`；CLI 自动开启下一 round。以本次 Spec Compliance Report 和项目真源为证据，输出下一轮 objective-level Execution Brief。
+6. `本轮目标` 描述尚未满足的系统目标、边界或证据；同类缺陷连续出现两次、组合场景失败或本轮推翻安全/架构假设时，升级为完整边界审计、根因治理或结构性重构，并在硬约束中禁止继续点补丁。
+7. 运行 `zimaflow reviewer-executor validate-brief`，显式传入已核实的 `--code-root` / `--docs-root` 和 `--change`，并用可重复的 `--source-file` 传入本轮实际引用的 Spec Compliance Report 和全部项目真源文件；面向多个宿主时运行 `parity`。不得用占位文件绕过正文复制检查。
+
+全部满足时，profile 路径运行 `review-decision --decision accepted`；这只接受当前 objective，不代替 OpenSpec archive、docs sync、finalize 或 close。
+
+正常审核往返只使用 state/event/matrix/receipt + Execution Brief / Execution Report，不自动创建 Handover。只有任务中断、长期暂停、用户明确要求，或执行者更换且项目真源不足以恢复时，才交给 `handover-manager`。
+
+如果审查发现的是规范缺失、范围/权限扩大、不可逆操作或未裁决产品决策，仍按本 Skill 既有规则停止并交用户，不伪装成可自主修复 Brief。
+
 ### Step 5.5：报告落盘要求
 
 全部 task 完成后的**全量审查**（区别于每个 task 完成后的轻量检查），其 Step 5 报告必须落盘为独立文件，不能只在 closing checklist 或 handover 里写一行"合规检查：done"。

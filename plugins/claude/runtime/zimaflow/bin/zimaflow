@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.5"
+VERSION="1.22.6"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -25,6 +25,8 @@ Usage:
   zimaflow knowledge-record --knowledge-id ID --event-type TYPE [options]
   zimaflow drift-check <change> [--json] [--write]
   zimaflow execution-input <change> --write [--json]
+  zimaflow reviewer-executor validate-brief|validate-report|parity|handover-decision [options]
+  zimaflow reviewer-executor start|transition|record-finding|run-receipt|review-ready|review-decision [options]
   zimaflow host-profile <host> [--json]
   zimaflow doctor <host> [--json] [options]
   zimaflow runtime install|upgrade|repair|remove <host> --install-root <temporary-root> [--desired-version VERSION] [--json]
@@ -61,6 +63,7 @@ Commands:
   drift-check <change>  Compare artifact hashes stored in .zimaflow-state.yaml.
   drift-check --write   Write or refresh artifact hash baselines.
   execution-input       Write a derived implementation-input snapshot for a full/hotfix change.
+  reviewer-executor     Validate communication and manage an opt-in objective/evidence lifecycle.
   host-profile          Report host discovery and packaging capabilities.
   doctor                Read-only host capability diagnostic with resumable intent.
   runtime               Manage a generated host runtime under an explicit temporary root.
@@ -1335,6 +1338,16 @@ state_load_or_defaults() {
   STATE_EXECUTION_INPUT_STATUS="not_applicable"
   STATE_EXECUTION_INPUT_GENERATED_AT=""
   STATE_EXECUTION_INPUT_CONFIRMED_AT=""
+  STATE_COLLABORATION_PROFILE="none"
+  STATE_COLLABORATION_OBJECTIVE_ID=""
+  STATE_COLLABORATION_ROUND_ID=""
+  STATE_COLLABORATION_PHASE=""
+  STATE_COLLABORATION_EVENTS=""
+  STATE_COLLABORATION_MATRIX=""
+  STATE_COLLABORATION_LATEST_REPORT=""
+  STATE_COLLABORATION_LATEST_RECEIPTS="[]"
+  STATE_COLLABORATION_TERMINATION=""
+  STATE_COLLABORATION_EVENT_HEAD=""
 
   if [ -f "$file" ]; then
     STATE_CHANGE_ID="$(yaml_top_value "$file" "change_id")"
@@ -1386,6 +1399,16 @@ state_load_or_defaults() {
     STATE_EXECUTION_INPUT_STATUS="$(yaml_nested_value "$file" "execution_input" "status")"
     STATE_EXECUTION_INPUT_GENERATED_AT="$(yaml_nested_value "$file" "execution_input" "generated_at")"
     STATE_EXECUTION_INPUT_CONFIRMED_AT="$(yaml_nested_value "$file" "execution_input" "confirmed_at")"
+    STATE_COLLABORATION_PROFILE="$(yaml_nested_value "$file" "collaboration" "profile")"
+    STATE_COLLABORATION_OBJECTIVE_ID="$(yaml_nested_value "$file" "collaboration" "objective_id")"
+    STATE_COLLABORATION_ROUND_ID="$(yaml_nested_value "$file" "collaboration" "round_id")"
+    STATE_COLLABORATION_PHASE="$(yaml_nested_value "$file" "collaboration" "phase")"
+    STATE_COLLABORATION_EVENTS="$(yaml_nested_value "$file" "collaboration" "loop_events")"
+    STATE_COLLABORATION_MATRIX="$(yaml_nested_value "$file" "collaboration" "boundary_matrix")"
+    STATE_COLLABORATION_LATEST_REPORT="$(yaml_nested_value "$file" "collaboration" "latest_report")"
+    STATE_COLLABORATION_LATEST_RECEIPTS="$(yaml_nested_value "$file" "collaboration" "latest_receipts")"
+    STATE_COLLABORATION_TERMINATION="$(yaml_nested_value "$file" "collaboration" "termination")"
+    STATE_COLLABORATION_EVENT_HEAD="$(yaml_nested_value "$file" "collaboration" "event_head")"
   fi
 
   [ -n "$STATE_CONTRACT_STATUS" ] || STATE_CONTRACT_STATUS="confirmed"
@@ -1402,6 +1425,8 @@ state_load_or_defaults() {
   [ -n "$STATE_ARCHIVE_STATUS" ] || STATE_ARCHIVE_STATUS="not_archived"
   [ -n "$STATE_DOCS_SYNCED" ] || STATE_DOCS_SYNCED="false"
   [ -n "$STATE_EXECUTION_INPUT_STATUS" ] || STATE_EXECUTION_INPUT_STATUS="not_applicable"
+  [ -n "$STATE_COLLABORATION_PROFILE" ] || STATE_COLLABORATION_PROFILE="none"
+  [ -n "$STATE_COLLABORATION_LATEST_RECEIPTS" ] || STATE_COLLABORATION_LATEST_RECEIPTS="[]"
 }
 
 state_write_scalar() {
@@ -1488,6 +1513,20 @@ state_write_file() {
     state_write_scalar '  ' generated_at "$STATE_EXECUTION_INPUT_GENERATED_AT"
     state_write_scalar '  ' confirmed_at "$STATE_EXECUTION_INPUT_CONFIRMED_AT"
     printf '\n'
+    if [ "$STATE_COLLABORATION_PROFILE" = "reviewer_executor" ]; then
+      printf 'collaboration:\n'
+      printf '  profile: %s\n' "$STATE_COLLABORATION_PROFILE"
+      state_write_scalar '  ' objective_id "$STATE_COLLABORATION_OBJECTIVE_ID"
+      state_write_scalar '  ' round_id "$STATE_COLLABORATION_ROUND_ID"
+      state_write_scalar '  ' phase "$STATE_COLLABORATION_PHASE"
+      state_write_scalar '  ' loop_events "$STATE_COLLABORATION_EVENTS"
+      state_write_scalar '  ' boundary_matrix "$STATE_COLLABORATION_MATRIX"
+      state_write_scalar '  ' latest_report "$STATE_COLLABORATION_LATEST_REPORT"
+      printf '  latest_receipts: %s\n' "$STATE_COLLABORATION_LATEST_RECEIPTS"
+      state_write_scalar '  ' termination "$STATE_COLLABORATION_TERMINATION"
+      state_write_scalar '  ' event_head "$STATE_COLLABORATION_EVENT_HEAD"
+      printf '\n'
+    fi
     printf 'updated_at: %s\n' "$updated_at"
     printf 'updated_by: zimaflow\n'
   } > "$temp_file" || {
@@ -1947,6 +1986,14 @@ run_execution_input() {
   fi
 }
 
+run_reviewer_executor() {
+  local zimaflow_home helper
+  zimaflow_home="$(find_zimaflow_home)" || return 2
+  helper="$zimaflow_home/scripts/reviewer-executor-loop-guard.py"
+  [ -f "$helper" ] || { echo "Reviewer–Executor guard not found: $helper" >&2; return 2; }
+  python3 "$helper" "$@"
+}
+
 git_changed_files() {
   local root="$1"
   (
@@ -2236,6 +2283,7 @@ run_finalize() {
   done
 
   local root matches match_count file="" previous_phase="" phase="unknown"
+  local persisted_docs_synced="" persisted_handover=""
   root="$(find_state_root)"
   [ -n "$root" ] || { echo "Not inside a git repository." >&2; return 2; }
   root="$(cd "$root" && pwd -P)"
@@ -2252,12 +2300,14 @@ run_finalize() {
     state_load_or_defaults "$file" "$change"
     previous_phase="$STATE_PHASE"
     phase="$STATE_PHASE"
+    persisted_docs_synced="$STATE_DOCS_SYNCED"
+    persisted_handover="$STATE_HANDOVER_PATH"
 
     [ "$STATE_ARCHIVE_STATUS" = "archived" ] || append_blocking_reason "archive_status_not_archived"
     case "$STATE_PHASE" in archived|closed) ;; *) append_blocking_reason "archive_phase_invalid" ;; esac
 
     [ "$docs_synced_override" = "true" ] && STATE_DOCS_SYNCED="true"
-    if [ -n "$handover_override" ]; then
+    if [ -n "$handover_override" ] && [ "$handover_override" != "$STATE_HANDOVER_PATH" ]; then
       STATE_HANDOVER_PATH="$handover_override"
       STATE_HANDOVER_UPDATED_AT="$(now_iso)"
     fi
@@ -2297,8 +2347,8 @@ EOF
 
   local changed="false"
   if [ "$STATE_PHASE" != "closed" ] \
-    || [ "$docs_synced_override" = "true" ] \
-    || [ -n "$handover_override" ]; then
+    || [ "$STATE_DOCS_SYNCED" != "$persisted_docs_synced" ] \
+    || [ "$STATE_HANDOVER_PATH" != "$persisted_handover" ]; then
     STATE_PHASE="closed"
     phase="closed"
     state_write_file "$file" || return 2
@@ -2337,10 +2387,11 @@ print_close_json() {
   local learn_candidate_scan="$7"
   local active_state_count="$8"
   local active_state_changes="$9"
-  local next_action="${10}"
-  local secrets_scan="${11}"
-  local secrets_hits="${12}"
-  local blocking_reasons="${13}"
+  local review_loop_active_changes="${10}"
+  local next_action="${11}"
+  local secrets_scan="${12}"
+  local secrets_hits="${13}"
+  local blocking_reasons="${14}"
 
   printf '{'
   printf '"repository":'; json_string "$repository"; printf ','
@@ -2354,9 +2405,27 @@ print_close_json() {
   printf '"secrets_hits":'; json_string_array "$secrets_hits"; printf ','
   printf '"active_state_count":%s,' "$active_state_count"
   printf '"active_state_changes":'; json_string_array "$active_state_changes"; printf ','
+  printf '"review_loop_active_changes":'; json_string_array "$review_loop_active_changes"; printf ','
   printf '"blocking_reasons":'; json_string_array "$blocking_reasons"; printf ','
   printf '"next_action":'; json_string "$next_action"
   printf '}\n'
+}
+
+review_loop_unaccepted_changes() {
+  local records="$1"
+  local change phase mode archive_status file profile loop_phase termination
+  while IFS=$'\t' read -r change phase mode archive_status file; do
+    [ -n "$file" ] && [ -f "$file" ] || continue
+    profile="$(yaml_nested_value "$file" "collaboration" "profile")"
+    [ "$profile" = "reviewer_executor" ] || continue
+    loop_phase="$(yaml_nested_value "$file" "collaboration" "phase")"
+    termination="$(yaml_nested_value "$file" "collaboration" "termination")"
+    if [ "$loop_phase" != "accepted" ] && [ "$termination" != "explicit" ]; then
+      printf '%s\n' "$change"
+    fi
+  done <<EOF
+$records
+EOF
 }
 
 run_close() {
@@ -2365,7 +2434,7 @@ run_close() {
   root="$(find_git_root)"
   if [ -z "$root" ]; then
     if [ "$format" = "json" ]; then
-      print_close_json "" "not_git_repo" 0 "" "not_checked" "not_checked" "not_checked" 0 "" "need_manual_confirmation" "not_checked" "" "not_git_repository"
+      print_close_json "" "not_git_repo" 0 "" "not_checked" "not_checked" "not_checked" 0 "" "" "need_manual_confirmation" "not_checked" "" "not_git_repository"
       return 2
     fi
     echo "zimaflow close"
@@ -2429,6 +2498,7 @@ EOF
   local active_state_changes=""
   local archived_unclosed_changes=""
   local other_unclosed_changes=""
+  local review_loop_active_changes=""
   if [ -n "$state_records_value" ]; then
     active_state_changes="$(
       printf '%s\n' "$state_records_value" \
@@ -2446,6 +2516,7 @@ EOF
         | sort
     )"
   fi
+  review_loop_active_changes="$(review_loop_unaccepted_changes "$state_records_value" | sort -u)"
 
   local archive_signal="no"
   if printf '%s\n' "$changed_files" | has_match '^openspec/specs/'; then
@@ -2507,6 +2578,11 @@ EOF
     append_blocking_reason "active_state_not_closed"
   fi
 
+  if [ -n "$review_loop_active_changes" ]; then
+    [ "$next_action" = "can_close" ] && next_action="need_manual_confirmation"
+    append_blocking_reason "review_loop_not_accepted"
+  fi
+
   if [ "$archive_signal" = "possible" ] && [ "$next_action" = "can_close" ]; then
     next_action="need_docs_sync"
     append_blocking_reason "archive_docs_not_synced"
@@ -2535,7 +2611,7 @@ EOF
   fi
 
   if [ "$format" = "json" ]; then
-    print_close_json "$root" "$git_status" "$dirty_count" "$unarchived_changes" "$archive_signal" "$docs_sync_gap" "$learn_candidate_scan" "$active_state_count" "$active_state_changes" "$next_action" "$secrets_scan" "$secrets_hits" "$BLOCKING_REASONS"
+    print_close_json "$root" "$git_status" "$dirty_count" "$unarchived_changes" "$archive_signal" "$docs_sync_gap" "$learn_candidate_scan" "$active_state_count" "$active_state_changes" "$review_loop_active_changes" "$next_action" "$secrets_scan" "$secrets_hits" "$BLOCKING_REASONS"
     return 0
   fi
 
@@ -2815,6 +2891,12 @@ state_apply_options() {
       --phase)
         [ "${2:-}" ] || { echo "Missing value for --phase" >&2; return 2; }
         STATE_PHASE="$2"
+        if [ "$STATE_PHASE" = "build_started" ] && [ -z "$STATE_STARTED_AT" ]; then
+          STATE_STARTED_AT="$(now_iso)"
+        fi
+        if [ "$STATE_PHASE" = "build_completed" ] && [ -z "$STATE_COMPLETED_AT" ]; then
+          STATE_COMPLETED_AT="$(now_iso)"
+        fi
         shift 2
         ;;
       --mode)
@@ -4471,6 +4553,9 @@ main() {
       ;;
     execution-input)
       run_execution_input "${2:-}" "${@:3}"
+      ;;
+    reviewer-executor)
+      run_reviewer_executor "${@:2}"
       ;;
     host-profile)
       run_host_profile "${2:-}" "${@:3}"

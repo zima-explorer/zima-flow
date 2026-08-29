@@ -209,6 +209,8 @@ cat openspec/changes/<name>/.zimaflow-state.yaml
 - `verification` 是否记录 `openspec validate <change-name>` 和全量测试结果，以及 Verification Evidence 最小字段（`last_command`、`last_result`、`evidence_path`、`blocked_reason`、`verified_at`）
 - archive 后是否写入 `archive.status` 和 `archive.docs_synced`
 - handover 生成后是否写入 `handover.latest_path`
+- 若 `collaboration.profile=reviewer_executor`：objective/round 是否明确，phase 是否由合法 lifecycle 推进，state `event_head` 是否与 event chain / `state_after` / 顶层 `updated_at` 一致，`loop_events` / `boundary_matrix` / `latest_report` / `latest_receipts` 指针是否可解析且与当前 round 一致
+- opt-in objective 是否已 `accepted`，或是否存在带用户证据的显式 termination；checkpoint、review_ready、changes_requested、普通测试失败或实现困难都不能当作收口完成
 
 state 缺失或明显过期时，列为 📝 建议补充；如果缺失会导致无法判断 verify/archive 状态，列为 ❌ 明确缺失。
 
@@ -224,6 +226,8 @@ state 缺失或明显过期时，列为 📝 建议补充；如果缺失会导�
 - blocked_reason：present / missing / not_applicable
 - 结论：verified / failed_needs_fix / blocked_needs_handover / evidence_incomplete
 ```
+
+若 opt-in objective 尚未 accepted/terminated，在顶部 `❌ 明确缺失` 独立列出 `review_loop_not_accepted`，并链接当前 matrix、receipts 与 Report；不得把它折叠成 `documentation_sync_not_confirmed`、`need_archive` 或笼统 verification 缺口。若 delta-spec 映射不全、diff/Report 链接非精确派生、存在非证据源码 dirty、event/state 分裂、receipt stale/source-tree/cwd/worktree/order 不一致或复发边界未系统闭合，保留 CLI 的精确 reason code。
 
 #### 验证状态必须上浮到顶部三级状态
 

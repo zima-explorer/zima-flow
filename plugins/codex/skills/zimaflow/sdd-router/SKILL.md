@@ -293,6 +293,16 @@ Gate 豁免：**quick 档**（口头确认即可）、**问题排障**（根因�
 - **问题排障** → `superpowers:systematic-debugging`，传问题现象、已知错误、复现线索；根因确认后回本 skill 二次定档
 - **紧急热修复** → 直接进 Superpowers 修复，完成后触发 `handover-manager` 补记录
 
+### Step 7.5：委派 Execution Brief
+
+当且仅当任务要交给 Claude Code、Codex 新 Session、WorkBuddy 或其他开发 Agent 执行时，读取 `<zimaflow-root>/references/Reviewer-Executor-Loop.md`，在 quick / standard / full 定档后按 Reviewer–Executor Loop Contract 输出简短 Execution Brief。
+
+- 使用 Step 1 已核实的 `code_root` / `docs_root`；未知时先解析，不得凭旧记忆猜路径。
+- Brief 必须给出稳定 `objective_id`、任务级 Definition of Done、自主修复权限、仅 `review_ready` / 真实 `blocked` 对外 Report 的 stopping policy；引用 requirement、Decision、OpenSpec、代码或 state 入口，不复制正文。普通同 Session 开发不生成 Brief，也不自动启用 profile。
+- 只有任务明确采用 Reviewer–Executor Loop 时，运行 `zimaflow reviewer-executor start --change <change> --objective <id> --round round-01 --events repo://<validation>/events.jsonl --matrix repo://<validation>/boundary-matrix.yaml --json`；默认 `profile: none` 保持既有单 Agent 行为。启动后由 CLI 管理 objective/round、event head 与 lifecycle timestamps，不手写 collaboration phase 或 event/state 恢复结果。
+- 同类缺陷连续出现两次、组合场景失败，或安全/架构假设失效时，目标升级为完整边界审计、根因治理或结构性重构，禁止逐函数点补丁。复发次数只能从 `record-finding` 的 append-only events 派生，不接受人工计数。
+- 生成后运行 `zimaflow reviewer-executor validate-brief`，显式传入已核实的 `--code-root` / `--docs-root`，并用可重复的 `--source-file` 传入本轮实际引用的每个 requirement、Decision、OpenSpec、state 或 Handover 文件；同时面向三宿主时再运行 `parity`。不得用占位文件绕过正文复制检查。Brief 自检失败应在当前权限内修正，不触发 Handover。
+
 full 档若本轮 `Decisions/` 已存在且用户确认沿用，可跳过重写，直接把路径传给 `task-planning`。
 
 ## 常见陷阱

@@ -126,6 +126,8 @@ sync_reason: 有意不同步：套件内部子 Skill，由 Zimaflow 主入口路
 
 ## 生成时机
 
+> **Reviewer–Executor Loop 边界**：活跃 loop 的 `checkpoint`、`review_ready`、`changes_requested` 与下一 round 都不自动创建或更新 Handover；恢复所需短期事实由 state 的 collaboration 指针与 `event_head`、append-only events 的 `previous_event_id/state_after`、boundary matrix、receipts 与最新 Report 持有。单个 event/state 半写入由 CLI 恢复或拒绝，不用 Handover 修补。只有任务中断、长期暂停、用户明确要求，或执行者更换且这些项目真源仍不足以恢复时才进入下列生成时机；触发后仍使用本 Skill 的完整模板和详细程度，不复制 validation artifacts 正文。
+
 ### 时机 1：session 正常收尾
 
 用户说"收工"、"今天先到这"、"收尾"、"完成"、"完结"、"结束"、"已 push"、"push 完了"、"提交完成"、"工作树干净"、"两边都 clean"、"本 session 完结"等，或当前任务完成时：

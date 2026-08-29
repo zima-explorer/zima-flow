@@ -35,7 +35,7 @@ Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工�
 
 ## 快速开始
 
-先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.5。
+先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.6。
 
 Claude Code：
 

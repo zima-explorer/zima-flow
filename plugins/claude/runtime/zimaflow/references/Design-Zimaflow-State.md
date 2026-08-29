@@ -106,6 +106,18 @@ execution_input:
   generated_at: ""
   confirmed_at: ""
 
+collaboration:
+  profile: none
+  objective_id: ""
+  round_id: ""
+  phase: ""
+  loop_events: ""
+  boundary_matrix: ""
+  latest_report: ""
+  latest_receipts: []
+  termination: ""
+  event_head: ""
+
 updated_at: "2026-07-11T21:30:00+08:00"
 updated_by: "zimaflow"
 ```
@@ -128,9 +140,12 @@ updated_by: "zimaflow"
 | `handover` | 最近一次 handover 路径 |
 | `artifact_hashes` | 契约、路线决策和 OpenSpec 三件套的 SHA256 基线，用于漂移检测 |
 | `execution_input` | full / hotfix 的只读派生快照指针；来源漂移时由读取端报告 stale，不替代真源工件 |
+| `collaboration` | 默认 `profile: none`；显式启用 Reviewer–Executor 后保存 objective/round、协作 phase、events/matrix/report/receipts 指针与已提交的 `event_head`，不复制证据正文 |
 | `updated_at` / `updated_by` | 最近更新时间和写入来源 |
 
 ## 五、phase 枚举
+
+本节顶层 `phase` 是 OpenSpec change 生命周期。`collaboration.phase` 是 opt-in Reviewer–Executor objective 生命周期（`planned → executing ↔ checkpoint → review_ready → changes_requested/accepted`，或 `blocked` / 显式 `terminated`），两者必须分开读取和推进；reviewer 接受 objective 不等于 archive，也不自动把顶层 phase 推进为 `verified` 或 `closed`。
 
 | phase | 进入条件 | 下一步 |
 |-------|----------|--------|
@@ -151,6 +166,7 @@ updated_by: "zimaflow"
 | 物理位置 / phase | archive evidence | docs evidence | handover evidence | 统一动作 | `close --json` 结果 / 原因 |
 |---|---|---|---|---|---|
 | active change / 非 `closed` | `not_archived` | 任意 | 任意 | 先完成 verify 与 OpenSpec archive | `need_archive` / `openspec_change_not_archived`，并按 state 补 `active_state_not_closed` |
+| active change / 任意 | 任意 | 任意 | 任意 | opt-in objective 必须先 reviewer `accepted` 或有用户证据的显式 termination | 独立增加 `review_loop_not_accepted`；不得折叠为 docs、archive 或 verification 原因 |
 | `archive/` / `archived` | `status=archived` | `docs_synced=false` | 任意 | 同步项目文档，再运行 finalize | `need_finalize` / `archive_state_not_closed`，另有 `archive_docs_not_synced` |
 | `archive/` / `archived` | `status=archived` | `docs_synced=true` | 空或文件不存在 | 生成/修复 handover，再运行 finalize | `need_finalize` / `archive_state_not_closed`；finalize 返回 `handover_missing` 或 `handover_not_found` |
 | `archive/` / `archived` | `status=archived` | `docs_synced=true` | 路径可解析且文件存在 | `zimaflow finalize <change> --json` | finalize 原子推进为 `closed`，`next_action=run_close` |
@@ -171,6 +187,8 @@ close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更�
 | proto-review 完成后 | `proto-review` | 写入 prototype / review-notes 路径，phase → `prototype_reviewed` |
 | OpenSpec propose 后 | `openspec-superpowers-bridge` 启动前检查 | 写入 openspec 三件套路径，phase → `spec_proposed` |
 | bridge Step 0 用户确认后 | `openspec-superpowers-bridge` | 写入 `spec_review_confirmed`、实现隔离信息，phase → `spec_reviewed` / `build_started` |
+| 跨 Agent objective 显式启动后 | `zimaflow reviewer-executor start` | 仅在当前 change 写入 `collaboration.profile=reviewer_executor`、objective/round、phase 与 `repo://` validation 指针；重复启动幂等 |
+| objective 执行 / 审核中 | `zimaflow reviewer-executor transition\|record-finding\|review-ready\|review-decision` | 只通过合法 transition 更新 `collaboration.phase`；finding 与 gate decision 追加到 `loop_events`，不手写复发次数 |
 | tasks 完成后 | `openspec-superpowers-bridge` | phase → `build_completed` |
 | verify / full tests 后 | `openspec-superpowers-bridge` 或 Agent | 写入 verification，phase → `verified` |
 | 建立交接基线时 | `zimaflow drift-check --write` | 写入 `artifact_hashes`，不推进 phase |
@@ -208,6 +226,7 @@ close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更�
 | `sdd-router` | 发现未关闭 change 时，提示继续现有 change 或新开需求 |
 | `openspec-superpowers-bridge` | Step 0 读取契约、spec review、隔离状态，避免凭对话记忆判断 |
 | `session-close-reconciler` | 对账 phase、verify、archive、docs sync、handover 是否一致 |
+| `session-close-reconciler`（opt-in） | 额外对账 objective/round、`collaboration.phase`、boundary matrix、latest report/receipts；未 accepted 时上浮 `review_loop_not_accepted` |
 | `handover-manager` | 在 handover 中引用 state 文件路径和当前 phase |
 | `zimaflow state` | 汇总当前目录（优先）或 git root 下的 `openspec/changes/*/.zimaflow-state.yaml`，输出 human / JSON |
 | `zimaflow recall` | 汇总未关闭 change 的进度、artifact 路径、verification / handover 状态，并按 `verified_at` → `handover.updated_at` → 文件 mtime 做 30 天 bit-rot 提醒；只读、不写、不推进 phase。`--days N` / `--summary-lines N` 可调阈值与摘要行数 |
@@ -219,12 +238,21 @@ close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更�
 | `zimaflow drift-check` | 对比 `artifact_hashes` 与当前文件 hash，发现契约、decision、proposal/design/tasks 是否漂移 |
 | `zimaflow close` | 只读最终 gate；扫描 active 与 archived state，输出粗粒度 `next_action` 和精确 `blocking_reasons[]`；只有 `next_action=can_close` 允许完成表述 |
 
+### Reviewer–Executor Evidence Ownership
+
+- `.zimaflow-state.yaml` 只保存协作索引和当前 phase；canonical contract 仍在 `references/Reviewer-Executor-Loop.md`，项目目标与验收语义仍在 Requirement / Decision / OpenSpec。
+- `loop_events` 是 append-only JSONL，由 CLI 追加 finding、round、gate 与 reviewer decision；每个新 event 链接 state `event_head` 并携带完整 `state_after`，event 落盘后原子替换 state，同时让顶层 `updated_at` 等于 event timestamp。下次命令只恢复一个有效 pending event，其余链条或 summary 分裂 fail closed。
+- `boundary_matrix` 必须把当前 Change 的 delta-spec requirement/scenario 全集一一映射到 boundary/owner/invariant/required evidence，并声明 `diff_base` 与精确 diff artifact；`latest_receipts` 指向带 argv、cwd、commit、source tree、isolation、batch/sequence、timestamps、result 与 artifact hashes 的 JSON 回执。
+- `review_ready` 是任务级证据门，不是 session close：required tasks 未完成、spec pair 缺失/未知/重复、diff 非当前派生、Report 链接不可解析、非证据源码 dirty、event/state 分裂、receipt stale/cwd/worktree/order 不一致或复发边界未系统闭合都应返回独立稳定诊断。
+- 默认 `profile: none` 时不得要求这些 artifacts，也不得改变现有 1.22.5 单 Agent 路径。
+
 ## 八、暂不做
 
 - 不做全自动 phase transition；仅 `archived → closed` 由 `zimaflow finalize` 统一自动写入。
 - 不用状态文件替代用户审核；`spec_review_confirmed: true` 只能在用户明确确认后写入。
 - `requirement_contract.intent_lock` 只是对照锚点，不替代契约正文；偏离意图锁时回到 requirement-contract / route-decision / OpenSpec 修订并重新确认。
 - 不把 handover 全文塞进 state。
+- 不把 boundary matrix、receipt 或 event 正文塞进 state，也不新增第二套 lifecycle Skill。
 - 不把轻量模式强行纳入 v0.1。
 - 不做加密或安全防篡改；`artifact_hashes` 只用于发现漂移。
 

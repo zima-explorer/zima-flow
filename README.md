@@ -30,34 +30,13 @@ Zimaflow is not an AI coding agent, a project-management system, or a copy of
 your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
 give their coding capabilities a reliable engineering process.
 
-## What's new in 1.22.6
-
-Zimaflow 1.22.6 adds an opt-in Reviewer–Executor Loop for work that moves
-between coding agents or sessions. It keeps one task objective, records review
-evidence as an append-only history, and allows a loop to close only after an
-explicit acceptance decision. Repeated findings of the same kind are escalated
-to a boundary-level review instead of being patched one file at a time.
-
-The loop is optional. The default single-session workflow remains lightweight,
-and teams can adopt the extra review lifecycle only where delegation or formal
-handoffs make it useful.
-
 ## How it works
 
 Route the request → agree on a lightweight contract → plan the first slice →
 implement with discipline → verify the result → hand over and close the
 session with reusable lessons.
 
-Zimaflow first selects a level of process that matches the change:
-
-- **Quick:** a low-risk, focused change; confirm the goal, scope, and proof of
-  completion without creating extra process artifacts.
-- **Standard:** a contained feature or extension; align on a short brief, plan
-  the work, and verify the critical path.
-- **Full:** a cross-module or high-risk change; use an agreed contract and
-  OpenSpec to make decisions, delivery, and review traceable.
-
-For complex work, Zimaflow coordinates OpenSpec for the specification and
+For a complex change, Zimaflow coordinates OpenSpec for the specification and
 implementation workflow. For a small change, it keeps the evidence and scope
 clear without forcing a heavyweight process.
 
@@ -72,8 +51,8 @@ every task into a compliance ceremony.
 
 ## Quick start
 
-Install the CLI for the host you use before adding Zimaflow. The latest
-published release is [Zimaflow 1.22.6](https://github.com/zima-explorer/zima-flow/releases/tag/v1.22.6).
+Install the CLI for the host you use before adding Zimaflow. This checkout
+contains Zimaflow 1.22.7.
 
 Claude Code:
 
@@ -145,29 +124,20 @@ claude plugin uninstall zimaflow@zimaflow
 claude plugin marketplace remove zimaflow
 ```
 
-For Codex, refresh the marketplace snapshot and reinstall the plugin, or
-remove the plugin and marketplace entry:
+Refresh the Codex marketplace snapshot, or remove the plugin and marketplace
+entry:
 
 ```sh
 codex plugin marketplace upgrade zimaflow
-codex plugin remove zimaflow@zimaflow
-codex plugin add zimaflow@zimaflow
-
-# Or remove the installation and marketplace entirely.
 codex plugin remove zimaflow@zimaflow
 codex plugin marketplace remove zimaflow
 ```
 
 ## Verify the release
 
-The release manifest verifies an immutable release payload. Check out the tag
-you want to verify rather than a working copy that may include later
-documentation or local changes. For the current release:
+Verify a checkout from its repository root:
 
 ```sh
-git clone https://github.com/zima-explorer/zima-flow.git
-cd zima-flow
-git checkout v1.22.6
 ./verify-release.sh --distribution .
 ```
 

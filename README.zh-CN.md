@@ -21,21 +21,9 @@ AI Coding 让实现变快，但需求边界、关键决策、验证结果和上�
 
 Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工作区的镜像。它与 Claude Code、Codex 和 WorkBuddy 配合，为已有的编码能力补上一条可靠的工程流程。
 
-## 1.22.6 有什么更新
-
-Zimaflow 1.22.6 新增了可选的 Reviewer–Executor Loop，适用于需要在多个编码 agent 或 session 之间交接的任务。它以一个任务目标为单位，追加记录审核证据，且只有在得到明确接受后才能收口；同类问题重复出现时，会升级为边界级审查，而不是逐个文件打补丁。
-
-这套循环不是默认负担。单 session 的默认工作流仍保持轻量；只有确实需要委派、交接或更严格审核时，团队才需要启用它。
-
 ## 工作流如何运转
 
 路由需求 → 确认轻量契约 → 拆解 first slice → 有纪律地实现 → 验证结果 → 交接、收口并沉淀可复用经验。
-
-Zimaflow 会先根据改动范围和风险选择流程档位：
-
-- **Quick：**低风险、聚焦的小改动；确认目标、范围和完成证据即可，不额外制造流程产物。
-- **Standard：**范围可控的功能或扩展；先对齐短 brief，拆解工作，并验证关键路径。
-- **Full：**跨模块或高风险改动；通过已确认的契约和 OpenSpec，让决策、交付和审核均可追溯。
 
 复杂改动时，Zimaflow 协调 OpenSpec 承接规范与实现工作流；小改动时，则在不引入重流程的前提下守住范围和证据。
 
@@ -47,7 +35,7 @@ Zimaflow 会先根据改动范围和风险选择流程档位：
 
 ## 快速开始
 
-先安装你所使用宿主的 CLI。当前已发布版本为 [Zimaflow 1.22.6](https://github.com/zima-explorer/zima-flow/releases/tag/v1.22.6)。
+先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.7。
 
 Claude Code：
 
@@ -98,34 +86,21 @@ WorkBuddy 通过 `adapters/workbuddy/runtime-manifest.yaml` 使用 `runtime/zima
 
 ## 更新或移除
 
-更新或移除 Claude Code plugin 及其 marketplace：
-
 ```sh
 claude plugin update zimaflow@zimaflow
 claude plugin uninstall zimaflow@zimaflow
 claude plugin marketplace remove zimaflow
-```
 
-Codex 先刷新 marketplace snapshot，再重新安装 plugin；也可以同时移除 plugin 和 marketplace：
-
-```sh
 codex plugin marketplace upgrade zimaflow
-codex plugin remove zimaflow@zimaflow
-codex plugin add zimaflow@zimaflow
-
-# 或者彻底移除安装和 marketplace。
 codex plugin remove zimaflow@zimaflow
 codex plugin marketplace remove zimaflow
 ```
 
 ## 验证发行内容
 
-release manifest 校验的是不可变的发行 payload。请检出要校验的 tag，不要直接在可能包含后续文档或本地改动的工作副本中执行。以当前版本为例：
+在仓库根目录执行：
 
 ```sh
-git clone https://github.com/zima-explorer/zima-flow.git
-cd zima-flow
-git checkout v1.22.6
 ./verify-release.sh --distribution .
 ```
 

@@ -122,6 +122,15 @@ updated_at: "2026-07-11T21:30:00+08:00"
 updated_by: "zimaflow"
 ```
 
+manifest-enabled Reviewer–Executor 可在 `collaboration` 追加两个逻辑指针：
+
+```yaml
+  objective_plan: repo://openspec/changes/<change>/validation/reviewer-executor/objective-plan.json
+  subject_manifest: repo://openspec/changes/<change>/validation/reviewer-executor/manifests/<objective>.json
+```
+
+state 不保存 `subject_digest`、required-objective 列表、accepted-current、verification tier 汇总或其他派生 payload；这些事实分别从 manifest、receipts 与 append-only events 重算。旧 no-manifest state 无需迁移。
+
 ## 四、字段语义
 
 | 字段 | 含义 |
@@ -140,7 +149,7 @@ updated_by: "zimaflow"
 | `handover` | 最近一次 handover 路径 |
 | `artifact_hashes` | 契约、路线决策和 OpenSpec 三件套的 SHA256 基线，用于漂移检测 |
 | `execution_input` | full / hotfix 的只读派生快照指针；来源漂移时由读取端报告 stale，不替代真源工件 |
-| `collaboration` | 默认 `profile: none`；显式启用 Reviewer–Executor 后保存 objective/round、协作 phase、events/matrix/report/receipts 指针与已提交的 `event_head`，不复制证据正文 |
+| `collaboration` | 默认 `profile: none`；显式启用 Reviewer–Executor 后保存当前 objective/round、协作 phase、events/matrix/report/receipts 指针与已提交的 `event_head`；manifest path 另存 objective plan/subject manifest 指针，不复制证据正文或 digest payload |
 | `updated_at` / `updated_by` | 最近更新时间和写入来源 |
 
 ## 五、phase 枚举
@@ -187,7 +196,7 @@ close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更�
 | proto-review 完成后 | `proto-review` | 写入 prototype / review-notes 路径，phase → `prototype_reviewed` |
 | OpenSpec propose 后 | `openspec-superpowers-bridge` 启动前检查 | 写入 openspec 三件套路径，phase → `spec_proposed` |
 | bridge Step 0 用户确认后 | `openspec-superpowers-bridge` | 写入 `spec_review_confirmed`、实现隔离信息，phase → `spec_reviewed` / `build_started` |
-| 跨 Agent objective 显式启动后 | `zimaflow reviewer-executor start` | 仅在当前 change 写入 `collaboration.profile=reviewer_executor`、objective/round、phase 与 `repo://` validation 指针；重复启动幂等 |
+| 跨 Agent objective 显式启动后 | `zimaflow reviewer-executor start` | 仅在当前 change 写入 `collaboration.profile=reviewer_executor`、current objective/round、phase 与 `repo://` validation 指针；manifest path 增加 plan/manifest 指针但不保存 digest；重复启动幂等 |
 | objective 执行 / 审核中 | `zimaflow reviewer-executor transition\|record-finding\|review-ready\|review-decision` | 只通过合法 transition 更新 `collaboration.phase`；finding 与 gate decision 追加到 `loop_events`，不手写复发次数 |
 | tasks 完成后 | `openspec-superpowers-bridge` | phase → `build_completed` |
 | verify / full tests 后 | `openspec-superpowers-bridge` 或 Agent | 写入 verification，phase → `verified` |
@@ -242,9 +251,13 @@ close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更�
 
 - `.zimaflow-state.yaml` 只保存协作索引和当前 phase；canonical contract 仍在 `references/Reviewer-Executor-Loop.md`，项目目标与验收语义仍在 Requirement / Decision / OpenSpec。
 - `loop_events` 是 append-only JSONL，由 CLI 追加 finding、round、gate 与 reviewer decision；每个新 event 链接 state `event_head` 并携带完整 `state_after`，event 落盘后原子替换 state，同时让顶层 `updated_at` 等于 event timestamp。下次命令只恢复一个有效 pending event，其余链条或 summary 分裂 fail closed。
-- `boundary_matrix` 必须把当前 Change 的 delta-spec requirement/scenario 全集一一映射到 boundary/owner/invariant/required evidence，并声明 `diff_base` 与精确 diff artifact；`latest_receipts` 指向带 argv、cwd、commit、source tree、isolation、batch/sequence、timestamps、result 与 artifact hashes 的 JSON 回执。
+- `boundary_matrix` 必须把当前 Change 的 delta-spec requirement/scenario 全集一一映射到 boundary/owner/invariant/required evidence，并声明 `diff_base` 与精确 diff artifact；manifest path 绑定 base 到当前 tracked workspace，plan/manifest/tasks/refs/semantic inputs 未跟踪时 fail closed，no-manifest path 保持 1.22.6 的 `diff_base..HEAD`；复发边界闭合由 guard 从相关行的 covered 状态与有效 evidence 派生，不保存或信任执行者自报的 closure 布尔值；`latest_receipts` 指向带 argv、cwd、commit、source tree、isolation、batch/sequence、timestamps、result 与 artifact hashes 的 JSON 回执。
 - `review_ready` 是任务级证据门，不是 session close：required tasks 未完成、spec pair 缺失/未知/重复、diff 非当前派生、Report 链接不可解析、非证据源码 dirty、event/state 分裂、receipt stale/cwd/worktree/order 不一致或复发边界未系统闭合都应返回独立稳定诊断。
-- 默认 `profile: none` 时不得要求这些 artifacts，也不得改变现有 1.22.5 单 Agent 路径。
+- 默认 `profile: none` 时不得要求这些 artifacts，也不得改变现有 1.22.6 单 Agent 路径。
+- manifest-enabled path 的 objective plan 为每个 required objective 声明唯一 `required_task_ids`；current objective task 门不扫描后续 objective 的未完成 tasks，whole-Change 门才检查全部 task 完整、唯一归属并完成。task 语义/归属进入 subject digest，checkbox 只作完成 metadata。
+- manifest、receipts、matrix、Report 形成单向 DAG；guard 从全部结构化引用入口按内容递归遍历，任意命名、多跳回边均拒绝；digest 固定由当前真源重算。`review_ready_passed` event 冻结通过机器门的 digest/subjects/obligations/receipt refs 与 Report/matrix/diff 内容哈希，accepted 只能消费同一份仍有效快照；accepted event 只冻结历史 proof，不在 state 缓存 `accepted_current`。首次 objective 与后续 objective 共用同一顺序不变量；启动后续 objective、current review-ready、whole-Change closure 与 release/finalize/close 四门都调用同一 current-validity evaluator；stale 只由当前/新 remediation objective 对 accepted 时冻结的 obligations 做完整语义覆盖，不读取可被改弱的 predecessor 当前 manifest，也不重开旧 lifecycle。
+- `checkpoint_targeted`、`objective_scope`、`whole_change`、`release` 是 gate-owned evidence tiers，不是状态。checkpoint 不生成正式 Report 或可满足 review-ready 的完整 receipt；metadata-only 不触发重跑，semantic input 变化 fail closed；whole/release validation 只在对应全 Change 门执行。
+- `implemented` 是 executor fact，`closure_pending`/`review_ready` 是 guard facts，`accepted` 是 reviewer fact，`release_ready` 是 release/finalize/close fact；这些 owner 分离，不组成第二生命周期。
 
 ## 八、暂不做
 

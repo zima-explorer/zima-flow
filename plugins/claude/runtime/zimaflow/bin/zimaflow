@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.6"
+VERSION="1.22.7"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -26,7 +26,8 @@ Usage:
   zimaflow drift-check <change> [--json] [--write]
   zimaflow execution-input <change> --write [--json]
   zimaflow reviewer-executor validate-brief|validate-report|parity|handover-decision [options]
-  zimaflow reviewer-executor start|transition|record-finding|run-receipt|review-ready|review-decision [options]
+  zimaflow reviewer-executor subject-digest|start|transition|record-finding|run-receipt [options]
+  zimaflow reviewer-executor receipt-check|coverage-check|mark-implemented|review-ready|review-decision [options]
   zimaflow host-profile <host> [--json]
   zimaflow doctor <host> [--json] [options]
   zimaflow runtime install|upgrade|repair|remove <host> --install-root <temporary-root> [--desired-version VERSION] [--json]
@@ -1348,6 +1349,8 @@ state_load_or_defaults() {
   STATE_COLLABORATION_LATEST_RECEIPTS="[]"
   STATE_COLLABORATION_TERMINATION=""
   STATE_COLLABORATION_EVENT_HEAD=""
+  STATE_COLLABORATION_OBJECTIVE_PLAN=""
+  STATE_COLLABORATION_SUBJECT_MANIFEST=""
 
   if [ -f "$file" ]; then
     STATE_CHANGE_ID="$(yaml_top_value "$file" "change_id")"
@@ -1409,6 +1412,8 @@ state_load_or_defaults() {
     STATE_COLLABORATION_LATEST_RECEIPTS="$(yaml_nested_value "$file" "collaboration" "latest_receipts")"
     STATE_COLLABORATION_TERMINATION="$(yaml_nested_value "$file" "collaboration" "termination")"
     STATE_COLLABORATION_EVENT_HEAD="$(yaml_nested_value "$file" "collaboration" "event_head")"
+    STATE_COLLABORATION_OBJECTIVE_PLAN="$(yaml_nested_value "$file" "collaboration" "objective_plan")"
+    STATE_COLLABORATION_SUBJECT_MANIFEST="$(yaml_nested_value "$file" "collaboration" "subject_manifest")"
   fi
 
   [ -n "$STATE_CONTRACT_STATUS" ] || STATE_CONTRACT_STATUS="confirmed"
@@ -1525,6 +1530,10 @@ state_write_file() {
       printf '  latest_receipts: %s\n' "$STATE_COLLABORATION_LATEST_RECEIPTS"
       state_write_scalar '  ' termination "$STATE_COLLABORATION_TERMINATION"
       state_write_scalar '  ' event_head "$STATE_COLLABORATION_EVENT_HEAD"
+      if [ -n "$STATE_COLLABORATION_OBJECTIVE_PLAN" ]; then
+        state_write_scalar '  ' objective_plan "$STATE_COLLABORATION_OBJECTIVE_PLAN"
+        state_write_scalar '  ' subject_manifest "$STATE_COLLABORATION_SUBJECT_MANIFEST"
+      fi
       printf '\n'
     fi
     printf 'updated_at: %s\n' "$updated_at"
@@ -2303,6 +2312,16 @@ run_finalize() {
     persisted_docs_synced="$STATE_DOCS_SYNCED"
     persisted_handover="$STATE_HANDOVER_PATH"
 
+    local release_coverage_reasons
+    release_coverage_reasons="$(reviewer_executor_coverage_reasons "$root" "$change" release "$file")"
+    if [ -n "$release_coverage_reasons" ]; then
+      while IFS= read -r reason; do
+        [ -n "$reason" ] && append_blocking_reason "$reason"
+      done <<EOF
+$release_coverage_reasons
+EOF
+    fi
+
     [ "$STATE_ARCHIVE_STATUS" = "archived" ] || append_blocking_reason "archive_status_not_archived"
     case "$STATE_PHASE" in archived|closed) ;; *) append_blocking_reason "archive_phase_invalid" ;; esac
 
@@ -2428,6 +2447,33 @@ $records
 EOF
 }
 
+reviewer_executor_coverage_reasons() {
+  local root="$1" change="$2" gate="$3" state_file="$4"
+  local profile objective_plan zimaflow_home guard output
+  profile="$(yaml_nested_value "$state_file" "collaboration" "profile")"
+  objective_plan="$(yaml_nested_value "$state_file" "collaboration" "objective_plan")"
+  [ "$profile" = "reviewer_executor" ] && [ -n "$objective_plan" ] || return 0
+  zimaflow_home="$(find_zimaflow_home 2>/dev/null || true)"
+  guard="$zimaflow_home/scripts/reviewer-executor-loop-guard.py"
+  [ -f "$guard" ] || { printf '%s\n' 'review_loop_coverage_unavailable'; return 0; }
+  output="$(cd "$root" && python3 "$guard" coverage-check --change "$change" --gate "$gate" --json 2>/dev/null || true)"
+  if [ -z "$output" ]; then
+    printf '%s\n' 'review_loop_coverage_unavailable'
+    return 0
+  fi
+  printf '%s' "$output" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except (ValueError, TypeError):
+    print("review_loop_coverage_unavailable")
+    raise SystemExit(0)
+for code in data.get("blocking_reasons", []):
+    if isinstance(code, str) and code:
+        print(code)
+'
+}
+
 run_close() {
   local format="${1:-human}"
   local root
@@ -2517,6 +2563,20 @@ EOF
     )"
   fi
   review_loop_active_changes="$(review_loop_unaccepted_changes "$state_records_value" | sort -u)"
+  local review_loop_coverage_reasons="" review_loop_coverage_changes=""
+  if [ -n "$state_records_value" ]; then
+    local coverage_change coverage_phase coverage_mode coverage_archive coverage_file coverage_codes
+    while IFS=$'\t' read -r coverage_change coverage_phase coverage_mode coverage_archive coverage_file; do
+      [ -n "$coverage_file" ] && [ -f "$coverage_file" ] || continue
+      coverage_codes="$(reviewer_executor_coverage_reasons "$root" "$coverage_change" release "$coverage_file")"
+      [ -n "$coverage_codes" ] || continue
+      review_loop_coverage_reasons="$(printf '%s\n%s' "$review_loop_coverage_reasons" "$coverage_codes" | awk 'NF' | sort -u)"
+      review_loop_coverage_changes="$(printf '%s\n%s' "$review_loop_coverage_changes" "$coverage_change" | awk 'NF' | sort -u)"
+    done <<EOF
+$state_records_value
+EOF
+  fi
+  review_loop_active_changes="$(printf '%s\n%s' "$review_loop_active_changes" "$review_loop_coverage_changes" | awk 'NF' | sort -u)"
 
   local archive_signal="no"
   if printf '%s\n' "$changed_files" | has_match '^openspec/specs/'; then
@@ -2581,6 +2641,14 @@ EOF
   if [ -n "$review_loop_active_changes" ]; then
     [ "$next_action" = "can_close" ] && next_action="need_manual_confirmation"
     append_blocking_reason "review_loop_not_accepted"
+  fi
+
+  if [ -n "$review_loop_coverage_reasons" ]; then
+    while IFS= read -r reason; do
+      [ -n "$reason" ] && append_blocking_reason "$reason"
+    done <<EOF
+$review_loop_coverage_reasons
+EOF
   fi
 
   if [ "$archive_signal" = "possible" ] && [ "$next_action" = "can_close" ]; then
@@ -4274,6 +4342,15 @@ run_release_check() {
     [ "$STATE_PHASE" = "closed" ] && continue
     active_count=$((active_count + 1))
 
+    local reviewer_release_ready="not_applicable" release_coverage_reasons=""
+    release_coverage_reasons="$(reviewer_executor_coverage_reasons "$root" "$STATE_CHANGE_ID" release "$file")"
+    if [ -n "$release_coverage_reasons" ]; then
+      reviewer_release_ready="false"
+      verify_incomplete="yes"
+    elif [ "$STATE_COLLABORATION_PROFILE" = "reviewer_executor" ] && [ -n "$STATE_COLLABORATION_OBJECTIVE_PLAN" ]; then
+      reviewer_release_ready="true"
+    fi
+
     if [ "$STATE_OPSX_VERIFY" != "passed" ] || [ "$STATE_FULL_TESTS" != "passed" ]; then
       verify_incomplete="yes"
     fi
@@ -4297,7 +4374,8 @@ run_release_check() {
       printf '"opsx_verify":'; json_string "$STATE_OPSX_VERIFY"; printf ','
       printf '"full_tests":'; json_string "$STATE_FULL_TESTS"; printf ','
       printf '"archive_status":'; json_string "$STATE_ARCHIVE_STATUS"; printf ','
-      printf '"handover_status":'; json_string "$handover_status"
+      printf '"handover_status":'; json_string "$handover_status"; printf ','
+      printf '"reviewer_executor_release_ready":'; json_string "$reviewer_release_ready"
       printf '}'
     )"
     first="no"

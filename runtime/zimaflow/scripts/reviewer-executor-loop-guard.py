@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,6 +47,7 @@ COLLABORATION_DEFAULTS = {
     "termination": "",
     "event_head": "",
 }
+COLLABORATION_MANIFEST_KEYS = ("objective_plan", "subject_manifest")
 
 
 def item(code: str, message: str, section: str | None = None) -> dict[str, str]:
@@ -203,7 +205,7 @@ def stable_spec_id(value: str) -> str:
 
 
 def required_spec_pairs(root: Path, change: str) -> dict[tuple[str, str], str]:
-    specs_root = root / "openspec" / "changes" / change / "specs"
+    specs_root = change_root(root, change) / "specs"
     if not specs_root.is_dir():
         raise ValueError("delta_specs_missing")
     pairs: dict[tuple[str, str], str] = {}
@@ -239,10 +241,28 @@ def current_git_root() -> Path:
     return Path(result.stdout.strip()).resolve()
 
 
-def state_path(root: Path, change: str) -> Path:
+def change_root(root: Path, change: str) -> Path:
     if not CHANGE_ID_RE.fullmatch(change):
         raise ValueError("invalid_change_id")
-    return root / "openspec" / "changes" / change / ".zimaflow-state.yaml"
+    active = root / "openspec" / "changes" / change
+    if active.is_dir():
+        return active
+    archive_root = root / "openspec" / "changes" / "archive"
+    matches = sorted(
+        candidate for candidate in archive_root.glob(f"*-{change}")
+        if candidate.is_dir() and candidate.name.endswith("-" + change)
+    ) if archive_root.is_dir() else []
+    if len(matches) > 1:
+        raise ValueError("archive_state_ambiguous")
+    return matches[0] if matches else active
+
+
+def state_path(root: Path, change: str) -> Path:
+    return change_root(root, change) / ".zimaflow-state.yaml"
+
+
+def validation_root_for(root: Path, change: str) -> Path:
+    return (change_root(root, change) / "validation" / "reviewer-executor").resolve()
 
 
 def logical_repo_path(root: Path, value: str, *, must_exist: bool = False) -> Path:
@@ -254,6 +274,14 @@ def logical_repo_path(root: Path, value: str, *, must_exist: bool = False) -> Pa
     resolved = (root / relative).resolve()
     if resolved != root and root not in resolved.parents:
         raise ValueError("artifact_path_outside_repository")
+    if not resolved.exists():
+        parts = Path(relative).parts
+        if len(parts) >= 4 and parts[:2] == ("openspec", "changes") and parts[2] != "archive":
+            archived_root = change_root(root, parts[2])
+            if archived_root != root / "openspec" / "changes" / parts[2]:
+                archived_candidate = archived_root.joinpath(*parts[3:]).resolve()
+                if archived_candidate == root or root in archived_candidate.parents:
+                    resolved = archived_candidate
     if must_exist and not resolved.is_file():
         raise FileNotFoundError(value)
     return resolved
@@ -272,12 +300,14 @@ def load_loop_context(change: str) -> tuple[Path, Path, str, dict[str, str]]:
 
 def render_collaboration(values: dict[str, str]) -> str:
     def line(key: str) -> str:
-        value = values.get(key, COLLABORATION_DEFAULTS[key])
+        value = values.get(key, COLLABORATION_DEFAULTS.get(key, ""))
         return f"  {key}: {value}" if value else f"  {key}:"
 
+    keys = list(COLLABORATION_DEFAULTS)
+    keys.extend(key for key in COLLABORATION_MANIFEST_KEYS if values.get(key))
     return "\n".join(
         ["collaboration:"]
-        + [line(key) for key in COLLABORATION_DEFAULTS]
+        + [line(key) for key in keys]
     )
 
 
@@ -333,7 +363,7 @@ def read_events(root: Path, collaboration: dict[str, str]) -> list[dict]:
 def append_event(root: Path, collaboration: dict[str, str], event_type: str, **fields: object) -> dict:
     reference = collaboration.get("loop_events", "")
     path = logical_repo_path(root, reference)
-    expected_parent = root / "openspec" / "changes" / str(fields["change_id"]) / "validation" / "reviewer-executor"
+    expected_parent = validation_root_for(root, str(fields["change_id"]))
     if path != expected_parent.resolve() and expected_parent.resolve() not in path.parents:
         raise ValueError("event_log_outside_validation_root")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -355,11 +385,13 @@ def append_event(root: Path, collaboration: dict[str, str], event_type: str, **f
 
 
 def collaboration_event_state(collaboration: dict[str, str]) -> dict[str, str]:
-    return {
+    state = {
         key: collaboration.get(key, COLLABORATION_DEFAULTS[key])
         for key in COLLABORATION_DEFAULTS
         if key != "event_head"
     }
+    state.update({key: collaboration[key] for key in COLLABORATION_MANIFEST_KEYS if collaboration.get(key)})
+    return state
 
 
 def commit_state_event(
@@ -401,11 +433,17 @@ def event_matches_summary(event: dict, collaboration: dict[str, str]) -> bool:
         return False
     state_after = event.get("state_after")
     if isinstance(state_after, dict):
-        return all(
+        base_matches = all(
             str(state_after.get(key, "")) == collaboration.get(key, COLLABORATION_DEFAULTS[key])
             for key in COLLABORATION_DEFAULTS
             if key != "event_head"
         )
+        manifest_matches = all(
+            str(state_after.get(key, "")) == collaboration.get(key, "")
+            for key in COLLABORATION_MANIFEST_KEYS
+            if key in state_after or collaboration.get(key)
+        )
+        return base_matches and manifest_matches
     return EVENT_PHASES.get(str(event.get("event_type"))) == collaboration.get("phase")
 
 
@@ -447,6 +485,9 @@ def reconcile_history(
     for key in COLLABORATION_DEFAULTS:
         if key != "event_head":
             collaboration[key] = str(state_after.get(key, COLLABORATION_DEFAULTS[key]))
+    for key in COLLABORATION_MANIFEST_KEYS:
+        if key in state_after:
+            collaboration[key] = str(state_after[key])
     collaboration["event_head"] = str(pending.get("event_id", ""))
     if not collaboration["event_head"] or not event_matches_summary(pending, collaboration):
         raise ValueError("lifecycle_history_diverged")
@@ -463,6 +504,10 @@ def context_or_error(
 ) -> tuple[tuple[Path, Path, str, dict[str, str]] | None, tuple[dict, int] | None]:
     try:
         root, path, text, collaboration = load_loop_context(change)
+        if "archive" in path.relative_to(root / "openspec" / "changes").parts and command not in {
+            "subject-digest", "receipt-check", "coverage-check"
+        }:
+            return None, violation_result(command, "change_archived", "归档 Change 只允许执行只读 coverage 重算")
         recovered = False
         if recover_history:
             text, collaboration, recovered = reconcile_history(root, path, text, collaboration)
@@ -472,6 +517,1100 @@ def context_or_error(
         return None, violation_result(command, str(exc), "Change 或状态路径无效")
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         return None, violation_result(command, "state_not_found", f"无法加载 Change state：{exc}")
+
+
+def load_json_object(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("verification_subject_manifest_invalid") from exc
+    if not isinstance(value, dict):
+        raise ValueError("verification_subject_manifest_invalid")
+    return value
+
+
+def normalize_semantic_text(value: str) -> str:
+    return unicodedata.normalize("NFC", value.replace("\r\n", "\n").replace("\r", "\n"))
+
+
+def canonical_content_hash(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("verification_subject_manifest_invalid") from exc
+    return hashlib.sha256(normalize_semantic_text(text).encode("utf-8")).hexdigest()
+
+
+def normalized_repo_reference(root: Path, value: object, *, must_exist: bool = False) -> str:
+    if not isinstance(value, str):
+        raise ValueError("verification_subject_manifest_invalid")
+    logical_repo_path(root, value, must_exist=must_exist)
+    return "repo://" + Path(value[len("repo://") :]).as_posix()
+
+
+def parse_required_tasks(root: Path, state_text: str) -> dict[str, dict[str, object]]:
+    tasks_reference = yaml_nested_values(state_text, "openspec").get("tasks_path", "")
+    try:
+        tasks_path = (
+            logical_repo_path(root, tasks_reference, must_exist=True)
+            if tasks_reference.startswith("repo://")
+            else logical_repo_path(root, "repo://" + tasks_reference, must_exist=True)
+        )
+        text = normalize_semantic_text(tasks_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, FileNotFoundError) as exc:
+        raise ValueError("verification_subject_mapping_mismatch") from exc
+    tasks: dict[str, dict[str, object]] = {}
+    current_id = ""
+    current_lines: list[str] = []
+
+    def finish_current() -> None:
+        nonlocal current_id, current_lines
+        if current_id:
+            tasks[current_id]["content"] = normalize_semantic_text("\n".join(current_lines).rstrip())
+        current_id = ""
+        current_lines = []
+
+    for line in text.splitlines():
+        match = re.match(r"^[ \t]*- \[([ xX])\][ \t]+([0-9]+(?:\.[0-9]+)*)[ \t]+(.+?)[ \t]*$", line)
+        if match:
+            finish_current()
+            task_id = match.group(2)
+            if task_id in tasks:
+                raise ValueError("objective_task_mapping_duplicate")
+            tasks[task_id] = {
+                "task_id": task_id,
+                "content": "",
+                "completed": match.group(1).lower() == "x",
+            }
+            current_id = task_id
+            current_lines = [match.group(3)]
+        elif current_id and re.match(r"^[ \t]*#{1,6}[ \t]+", line):
+            finish_current()
+        elif current_id:
+            current_lines.append(line)
+    finish_current()
+    return tasks
+
+
+def required_task_semantics(root: Path, state_text: str, required_task_ids: list[str]) -> list[dict[str, str]]:
+    tasks = parse_required_tasks(root, state_text)
+    normalized_ids = sorted({normalize_semantic_text(value) for value in required_task_ids})
+    if len(normalized_ids) != len(required_task_ids) or any(task_id not in tasks for task_id in normalized_ids):
+        raise ValueError("verification_subject_mapping_mismatch")
+    return [{"task_id": task_id, "content": str(tasks[task_id]["content"])} for task_id in normalized_ids]
+
+
+def validate_objective_plan(root: Path, state_text: str, change: str, plan: dict) -> tuple[list[dict], dict[str, dict[str, object]]]:
+    objectives = plan.get("required_objectives")
+    if plan.get("schema_version") != 1 or plan.get("change_id") != change or not isinstance(objectives, list) or not objectives:
+        raise ValueError("verification_subject_manifest_invalid")
+    allowed_plan_keys = {"schema_version", "change_id", "required_objectives", "metadata"}
+    allowed_objective_keys = {
+        "objective_id", "order", "purpose", "required", "required_task_ids", "manifest", "remediates", "metadata"
+    }
+    if set(plan) - allowed_plan_keys:
+        raise ValueError("verification_subject_manifest_invalid")
+    tasks = parse_required_tasks(root, state_text)
+    objective_ids: set[str] = set()
+    orders: set[int] = set()
+    owners: dict[str, list[str]] = {}
+    normalized: list[dict] = []
+    for objective in objectives:
+        if not isinstance(objective, dict) or set(objective) - allowed_objective_keys:
+            raise ValueError("verification_subject_manifest_invalid")
+        objective_id = objective.get("objective_id")
+        order = objective.get("order")
+        task_ids = objective.get("required_task_ids")
+        if (
+            not isinstance(objective_id, str) or not objective_id or objective_id in objective_ids
+            or not isinstance(order, int) or order < 1 or order in orders
+            or objective.get("required") is not True
+            or not isinstance(objective.get("purpose"), str) or not objective.get("purpose")
+            or not isinstance(objective.get("manifest"), str)
+            or not isinstance(task_ids, list) or not task_ids
+            or not all(isinstance(task_id, str) and task_id for task_id in task_ids)
+        ):
+            raise ValueError("verification_subject_manifest_invalid")
+        objective_ids.add(objective_id)
+        orders.add(order)
+        if len(set(task_ids)) != len(task_ids):
+            raise ValueError("objective_task_mapping_duplicate")
+        for task_id in task_ids:
+            if task_id not in tasks:
+                raise ValueError("objective_task_mapping_unknown")
+            owners.setdefault(task_id, []).append(objective_id)
+        remediates = objective.get("remediates", [])
+        if not isinstance(remediates, list) or not all(isinstance(value, str) and value for value in remediates):
+            raise ValueError("verification_subject_manifest_invalid")
+        normalized.append(objective)
+    if orders != set(range(1, len(normalized) + 1)):
+        raise ValueError("verification_subject_manifest_invalid")
+    if any(len(values) > 1 for values in owners.values()):
+        raise ValueError("objective_task_mapping_duplicate")
+    if set(owners) != set(tasks):
+        raise ValueError("objective_task_mapping_incomplete")
+    return sorted(normalized, key=lambda entry: entry["order"]), tasks
+
+
+SET_ARRAY_KEYS = {
+    "allowed_hosts",
+    "allowed_isolation",
+    "refs",
+    "required_evidence",
+    "required_task_ids",
+    "requirement_ids",
+    "scenario_ids",
+    "spec_pairs",
+    "subject_ids",
+}
+
+
+def projection_obligation_pairs(projection: dict) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for subject in projection.get("subjects", []):
+        raw_pairs = subject.get("spec_pairs", [])
+        if not isinstance(raw_pairs, list):
+            raise ValueError("verification_subject_manifest_invalid")
+        for pair in raw_pairs:
+            if not isinstance(pair, dict) or set(pair) != {"requirement_id", "scenario_id"}:
+                raise ValueError("verification_subject_manifest_invalid")
+            pairs.add((str(pair["requirement_id"]), str(pair["scenario_id"])))
+        if subject.get("kind") == "composition_invariant":
+            pairs.add(("@composition", str(subject["subject_id"])))
+    return pairs
+VERIFICATION_TIER_GATES = {
+    "checkpoint_targeted": "checkpoint",
+    "objective_scope": "review-ready",
+    "whole_change": "whole-change",
+    "release": "release",
+}
+STRUCTURED_BLOCKER_CATEGORIES = {
+    "product_decision",
+    "permission_expansion",
+    "directory_expansion",
+    "irreversible_operation",
+    "overwrite_user_changes",
+    "external_credentials",
+    "external_system",
+    "specification_conflict",
+}
+
+
+def normalize_contract_value(value: object, key: str = "") -> object:
+    if isinstance(value, str):
+        return normalize_semantic_text(value)
+    if isinstance(value, list):
+        normalized = [normalize_contract_value(entry) for entry in value]
+        if key == "allowed_isolation":
+            normalized = [str(Path(entry).resolve()) if isinstance(entry, str) and Path(entry).is_absolute() else entry for entry in normalized]
+        if key in SET_ARRAY_KEYS:
+            return sorted(normalized, key=lambda entry: json.dumps(entry, ensure_ascii=False, sort_keys=True))
+        return normalized
+    if isinstance(value, dict):
+        return {name: normalize_contract_value(entry, name) for name, entry in value.items()}
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    raise ValueError("verification_subject_manifest_invalid")
+
+
+def structured_repo_references(value: object) -> set[str]:
+    references: set[str] = set()
+    if isinstance(value, str) and value.startswith("repo://"):
+        references.add(value)
+    elif isinstance(value, list):
+        for entry in value:
+            references.update(structured_repo_references(entry))
+    elif isinstance(value, dict):
+        for entry in value.values():
+            references.update(structured_repo_references(entry))
+    return references
+
+
+def structured_artifact(path: Path) -> tuple[object | None, set[str], str | None]:
+    """Return structured content, its repo refs, and any downstream evidence role.
+
+    Evidence identity is content-owned.  A legal filename or extension must not
+    be able to turn a receipt/matrix/Report into an upstream manifest input.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None, set(), None
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, (dict, list)):
+        keys = set(value) if isinstance(value, dict) else set()
+        role = None
+        if {
+            "command", "cwd", "git_commit", "source_tree", "batch_id",
+            "sequence", "result", "evidence_type", "artifacts",
+        }.issubset(keys):
+            role = "receipt"
+        elif {"change_id", "objective_id", "round_id", "rows", "diff_artifact"}.issubset(keys):
+            role = "boundary_matrix"
+        elif "event_type" in keys and "event_hash" in keys:
+            role = "event_log"
+        return value, structured_repo_references(value), role
+
+    headings = {
+        match.group(2).strip().rstrip("#").rstrip()
+        for match in ATX_HEADING_RE.finditer(text)
+        if len(match.group(1)) == 2
+    }
+    if set(REPORT_SECTIONS).issubset(headings):
+        return None, repo_links(text), "execution_report"
+    if text.startswith("diff --git ") or text.startswith("GIT binary patch"):
+        return None, set(), "diff"
+
+    yaml_keys = {
+        match.group(1)
+        for match in re.finditer(r"(?m)^\s*(?:-\s+)?([A-Za-z_][A-Za-z0-9_-]*)\s*:", text)
+    }
+    first_content = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    yaml_like = (
+        first_content == "---"
+        or bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*\s*:.*", first_content))
+    )
+    if yaml_like and len(yaml_keys) >= 2:
+        role = None
+        if {"change_id", "objective_id", "round_id", "rows", "diff_artifact"}.issubset(yaml_keys):
+            role = "boundary_matrix"
+        return {"yaml_keys": sorted(yaml_keys)}, repo_links(text), role
+    return None, set(), None
+
+
+def validate_manifest_dag(root: Path, manifest_path: Path, manifest: dict, validation_root: Path) -> None:
+    visited: set[Path] = set()
+    active: set[Path] = {manifest_path}
+
+    def visit_structured(path: Path) -> None:
+        if path in active:
+            raise ValueError("verification_subject_cycle_detected")
+        if path in visited:
+            return
+        visited.add(path)
+        value, references, downstream_role = structured_artifact(path)
+        if downstream_role is not None:
+            raise ValueError("verification_subject_cycle_detected")
+        if value is None:
+            if path.suffix.lower() == ".json":
+                raise ValueError("verification_subject_manifest_invalid")
+            return
+        active.add(path)
+        for reference in references:
+            try:
+                target = logical_repo_path(root, reference, must_exist=True)
+            except (ValueError, FileNotFoundError) as exc:
+                raise ValueError("verification_subject_manifest_invalid") from exc
+            if target == manifest_path:
+                raise ValueError("verification_subject_cycle_detected")
+            visit_structured(target)
+        active.remove(path)
+
+    for reference in structured_repo_references(manifest):
+        try:
+            target = logical_repo_path(root, reference, must_exist=False)
+        except ValueError as exc:
+            raise ValueError("verification_subject_manifest_invalid") from exc
+        if target == manifest_path:
+            raise ValueError("verification_subject_cycle_detected")
+        if target.is_file():
+            visit_structured(target)
+
+
+def build_subject_projection(
+    root: Path, state_text: str, change: str, objective_id: str, objective: dict, manifest: dict
+) -> dict:
+    allowed_manifest_keys = {
+        "schema_version", "normalization_version", "change_id", "objective_id",
+        "required_task_ids", "subjects", "metadata",
+    }
+    allowed_subject_keys = {
+        "subject_id", "kind", "refs", "semantic_inputs", "requirement_ids", "scenario_ids",
+        "spec_pairs", "boundary_id", "owner", "invariant", "required_evidence",
+        "verification_contract", "metadata",
+    }
+    if set(manifest) - allowed_manifest_keys:
+        raise ValueError("verification_subject_manifest_invalid")
+    required_task_ids = objective.get("required_task_ids")
+    if not isinstance(required_task_ids, list) or not required_task_ids or not all(
+        isinstance(value, str) and value for value in required_task_ids
+    ):
+        raise ValueError("verification_subject_mapping_mismatch")
+    manifest_task_ids = manifest.get("required_task_ids")
+    if (
+        not isinstance(manifest_task_ids, list)
+        or len(manifest_task_ids) != len(required_task_ids)
+        or sorted(manifest_task_ids) != sorted(required_task_ids)
+    ):
+        raise ValueError("verification_subject_mapping_mismatch")
+    if manifest.get("normalization_version") != 1:
+        raise ValueError("verification_subject_manifest_invalid")
+    subjects = manifest.get("subjects")
+    if not isinstance(subjects, list) or not subjects:
+        raise ValueError("verification_subject_manifest_invalid")
+    normalized_subjects: list[dict] = []
+    subject_ids: set[str] = set()
+    for raw_subject in subjects:
+        if not isinstance(raw_subject, dict) or set(raw_subject) - allowed_subject_keys:
+            raise ValueError("verification_subject_manifest_invalid")
+        subject_id = raw_subject.get("subject_id")
+        kind = raw_subject.get("kind")
+        refs = raw_subject.get("refs")
+        inputs = raw_subject.get("semantic_inputs")
+        evidence = raw_subject.get("required_evidence")
+        contract = raw_subject.get("verification_contract")
+        if (
+            not isinstance(subject_id, str)
+            or not subject_id
+            or subject_id in subject_ids
+            or not isinstance(kind, str)
+            or not kind
+            or not isinstance(refs, list)
+            or not refs
+            or not all(isinstance(reference, str) and reference.startswith("repo://") for reference in refs)
+            or not isinstance(inputs, list)
+            or not inputs
+            or not isinstance(evidence, list)
+            or not evidence
+            or not all(isinstance(value, str) and value for value in evidence)
+            or not isinstance(contract, dict)
+            or not contract
+        ):
+            raise ValueError("verification_subject_manifest_invalid")
+        subject_ids.add(subject_id)
+        normalized_inputs: list[dict[str, str]] = []
+        for raw_input in inputs:
+            if not isinstance(raw_input, dict) or set(raw_input) - {"path", "sha256"}:
+                raise ValueError("verification_subject_manifest_invalid")
+            reference = normalized_repo_reference(root, raw_input.get("path"), must_exist=True)
+            content_hash = canonical_content_hash(logical_repo_path(root, reference, must_exist=True))
+            declared_hash = raw_input.get("sha256")
+            if declared_hash is not None and declared_hash != content_hash:
+                raise ValueError("verification_subject_mapping_mismatch")
+            normalized_inputs.append({"path": reference, "sha256": content_hash})
+        semantic_subject = {
+            key: value
+            for key, value in raw_subject.items()
+            if key not in {"refs", "semantic_inputs", "metadata"}
+        }
+        semantic_subject["subject_id"] = normalize_semantic_text(subject_id)
+        semantic_subject["kind"] = normalize_semantic_text(kind)
+        semantic_subject["refs"] = sorted(
+            {normalized_repo_reference(root, reference) for reference in refs}
+        )
+        semantic_subject["semantic_inputs"] = sorted(normalized_inputs, key=lambda entry: entry["path"])
+        semantic_subject["required_evidence"] = sorted(
+            {normalize_semantic_text(str(value)) for value in evidence}
+        )
+        semantic_subject["verification_contract"] = normalize_contract_value(contract)
+        normalized_subjects.append(normalize_contract_value(semantic_subject))
+    return {
+        "schema_version": 1,
+        "normalization_version": 1,
+        "change_id": normalize_semantic_text(change),
+        "objective_id": normalize_semantic_text(objective_id),
+        "objective_order": int(objective["order"]),
+        "objective_purpose": normalize_semantic_text(str(objective["purpose"])),
+        "remediates": sorted(normalize_semantic_text(str(value)) for value in objective.get("remediates", [])),
+        "required_tasks": required_task_semantics(root, state_text, required_task_ids),
+        "subjects": sorted(normalized_subjects, key=lambda entry: str(entry["subject_id"])),
+    }
+
+
+def load_manifest_opt_in(
+    root: Path, change: str, objective_id: str, plan_reference: str, validation_root: Path
+) -> tuple[str, str, dict]:
+    try:
+        plan_path = logical_repo_path(root, plan_reference, must_exist=True)
+    except (ValueError, FileNotFoundError) as exc:
+        raise ValueError("verification_subject_manifest_missing") from exc
+    if validation_root not in plan_path.parents:
+        raise ValueError("verification_subject_manifest_invalid")
+    plan = load_json_object(plan_path)
+    state_text = state_path(root, change).read_text(encoding="utf-8")
+    objectives, _ = validate_objective_plan(root, state_text, change, plan)
+    matches = [entry for entry in objectives if isinstance(entry, dict) and entry.get("objective_id") == objective_id]
+    if len(matches) != 1:
+        raise ValueError("verification_subject_mapping_mismatch")
+    objective = matches[0]
+    manifest_reference = objective.get("manifest")
+    if not isinstance(manifest_reference, str):
+        raise ValueError("verification_subject_manifest_missing")
+    try:
+        manifest_path = logical_repo_path(root, manifest_reference, must_exist=True)
+    except (ValueError, FileNotFoundError) as exc:
+        raise ValueError("verification_subject_manifest_missing") from exc
+    if validation_root not in manifest_path.parents:
+        raise ValueError("verification_subject_manifest_invalid")
+    manifest = load_json_object(manifest_path)
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("change_id") != change
+        or manifest.get("objective_id") != objective_id
+    ):
+        raise ValueError("verification_subject_mapping_mismatch")
+    validate_manifest_dag(root, manifest_path, manifest, validation_root)
+    projection = build_subject_projection(root, state_text, change, objective_id, objective, manifest)
+    digest = hashlib.sha256(
+        json.dumps(projection, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return manifest_reference, digest, projection
+
+
+def subject_digest(args: argparse.Namespace) -> tuple[dict, int]:
+    context, error = context_or_error("subject-digest", args.change)
+    if error:
+        return error
+    assert context is not None
+    root, _, _, _ = context
+    validation_root = validation_root_for(root, args.change)
+    try:
+        manifest_reference, digest, projection = load_manifest_opt_in(
+            root, args.change, args.objective, args.objective_plan, validation_root
+        )
+    except ValueError as exc:
+        return violation_result("subject-digest", str(exc), "objective plan 或 subject manifest 无效")
+    return build_result(
+        "subject-digest", None, [], manifest_enabled=True, manifest=manifest_reference,
+        subject_digest=digest, subject_ids=[entry["subject_id"] for entry in projection["subjects"]],
+        normalization_version=projection["normalization_version"],
+    ), 0
+
+
+def current_subject_context(root: Path, change: str, collaboration: dict[str, str]) -> tuple[str, str, dict]:
+    plan_reference = collaboration.get("objective_plan", "")
+    if not plan_reference:
+        raise ValueError("verification_subject_manifest_missing")
+    validation_root = validation_root_for(root, change)
+    return load_manifest_opt_in(root, change, collaboration["objective_id"], plan_reference, validation_root)
+
+
+def verification_subject_context(
+    root: Path, change: str, collaboration: dict[str, str], gate: str | None
+) -> tuple[str, str, dict]:
+    if gate not in {"whole-change", "release"}:
+        return current_subject_context(root, change, collaboration)
+    plan_reference = collaboration.get("objective_plan", "")
+    if not plan_reference:
+        raise ValueError("verification_subject_manifest_missing")
+    state_text = state_path(root, change).read_text(encoding="utf-8")
+    objectives, _ = validate_objective_plan(
+        root, state_text, change, load_json_object(logical_repo_path(root, plan_reference, must_exist=True))
+    )
+    validation_root = validation_root_for(root, change)
+    objective_digests: list[dict[str, str]] = []
+    subjects: dict[str, dict] = {}
+    subject_owners: dict[str, str] = {}
+    for objective in objectives:
+        objective_id = str(objective["objective_id"])
+        _, digest, projection = load_manifest_opt_in(
+            root, change, objective_id, plan_reference, validation_root
+        )
+        objective_digests.append({"objective_id": objective_id, "subject_digest": digest})
+        for subject in projection.get("subjects", []):
+            subject_id = str(subject["subject_id"])
+            previous = subjects.get(subject_id)
+            if previous is not None and previous != subject:
+                previous_owner = subject_owners[subject_id]
+                if previous_owner not in objective.get("remediates", []):
+                    raise ValueError("verification_subject_mapping_mismatch")
+            subjects[subject_id] = subject
+            subject_owners[subject_id] = objective_id
+    aggregate = {
+        "schema_version": 1,
+        "normalization_version": 1,
+        "change_id": change,
+        "objective_digests": objective_digests,
+        "subjects": [subjects[key] for key in sorted(subjects)],
+    }
+    digest = hashlib.sha256(
+        json.dumps(aggregate, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return plan_reference, digest, aggregate
+
+
+def current_plan_context(
+    root: Path, state_text: str, change: str, collaboration: dict[str, str]
+) -> tuple[list[dict], dict[str, dict[str, object]], dict]:
+    reference = collaboration.get("objective_plan", "")
+    if not reference:
+        raise ValueError("verification_subject_manifest_missing")
+    try:
+        plan_path = logical_repo_path(root, reference, must_exist=True)
+    except (ValueError, FileNotFoundError) as exc:
+        raise ValueError("verification_subject_manifest_missing") from exc
+    plan = load_json_object(plan_path)
+    objectives, tasks = validate_objective_plan(root, state_text, change, plan)
+    matches = [entry for entry in objectives if entry["objective_id"] == collaboration["objective_id"]]
+    if len(matches) != 1:
+        raise ValueError("verification_subject_mapping_mismatch")
+    return objectives, tasks, matches[0]
+
+
+def objective_task_gate_violations(
+    root: Path, state_text: str, change: str, collaboration: dict[str, str], *, whole_change: bool = False
+) -> list[dict[str, str]]:
+    try:
+        objectives, tasks, current = current_plan_context(root, state_text, change, collaboration)
+    except ValueError as exc:
+        return [item(str(exc), "objective plan task ownership 无法验证")]
+    assignment_violations = objective_assignment_violations(root, collaboration, objectives)
+    if assignment_violations:
+        return assignment_violations
+    task_ids = sorted(tasks) if whole_change else sorted(current["required_task_ids"])
+    incomplete = [task_id for task_id in task_ids if not tasks[task_id]["completed"]]
+    if incomplete:
+        return [item("task_completion_incomplete", "required tasks 未完成：" + ", ".join(incomplete))]
+    return []
+
+
+def objective_assignment_violations(
+    root: Path, collaboration: dict[str, str], objectives: list[dict]
+) -> list[dict[str, str]]:
+    try:
+        events = read_events(root, collaboration)
+    except ValueError as exc:
+        return [item("event_log_invalid", str(exc))]
+    assignments = {entry["objective_id"]: sorted(entry["required_task_ids"]) for entry in objectives}
+    for event in events:
+        if event.get("event_type") != "objective_planned" or not isinstance(event.get("required_task_ids"), list):
+            continue
+        objective_id = str(event.get("objective_id", ""))
+        if objective_id in assignments and sorted(event["required_task_ids"]) != assignments[objective_id]:
+            return [item("objective_task_assignment_changed", f"objective task 归属已静默改变：{objective_id}")]
+    return []
+
+
+def receipt_provenance_authorized(root: Path, receipt: dict, projection: dict) -> bool:
+    if receipt.get("cwd") != str(root):
+        return False
+    host = receipt.get("host")
+    isolation = receipt.get("isolation_id")
+    subject_ids = set(receipt.get("subject_ids", []))
+    for subject in projection.get("subjects", []):
+        if subject.get("subject_id") not in subject_ids:
+            continue
+        contract = subject.get("verification_contract", {})
+        allowed_hosts = contract.get("allowed_hosts", [])
+        allowed_isolation = contract.get("allowed_isolation", [])
+        if host not in allowed_hosts or isolation not in allowed_isolation:
+            return False
+    return True
+
+
+def subject_fingerprints(projection: dict) -> dict[str, str]:
+    return {
+        str(subject["subject_id"]): hashlib.sha256(
+            json.dumps(subject, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        for subject in projection.get("subjects", [])
+    }
+
+
+def subject_obligations(projection: dict) -> dict[str, dict]:
+    """Freeze the reviewer-owned obligation contract, excluding implementation bytes."""
+    obligations: dict[str, dict] = {}
+    for subject in projection.get("subjects", []):
+        subject_id = str(subject["subject_id"])
+        obligations[subject_id] = normalize_contract_value(
+            {
+                "subject_id": subject_id,
+                "kind": subject.get("kind", ""),
+                "refs": subject.get("refs", []),
+                "spec_pairs": subject.get("spec_pairs", []),
+                "requirement_ids": subject.get("requirement_ids", []),
+                "scenario_ids": subject.get("scenario_ids", []),
+                "boundary_id": subject.get("boundary_id", ""),
+                "invariant": subject.get("invariant", ""),
+                "owner": subject.get("owner", ""),
+                "required_evidence": subject.get("required_evidence", []),
+                "verification_contract": subject.get("verification_contract", {}),
+            }
+        )
+    return obligations
+
+
+def obligations_cover(frozen: object, candidate_projection: dict) -> bool:
+    if not isinstance(frozen, dict) or not frozen:
+        return False
+    candidate = subject_obligations(candidate_projection)
+    set_fields = {"refs", "spec_pairs", "requirement_ids", "scenario_ids", "required_evidence"}
+    exact_fields = {"kind", "boundary_id", "invariant", "owner", "verification_contract"}
+    for subject_id, accepted in frozen.items():
+        current = candidate.get(str(subject_id))
+        if not isinstance(accepted, dict) or not isinstance(current, dict):
+            return False
+        for field in exact_fields:
+            if current.get(field) != accepted.get(field):
+                return False
+        for field in set_fields:
+            accepted_values = {
+                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                for value in accepted.get(field, [])
+            }
+            current_values = {
+                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                for value in current.get(field, [])
+            }
+            if not accepted_values.issubset(current_values):
+                return False
+    return True
+
+
+def accepted_current_evaluation(
+    root: Path, state_text: str, change: str, collaboration: dict[str, str], *, include_current: bool
+) -> tuple[list[dict], list[dict]]:
+    objectives, _, current = current_plan_context(root, state_text, change, collaboration)
+    events = read_events(root, collaboration)
+    current_order = int(current["order"])
+    candidates = [
+        objective for objective in objectives
+        if include_current or int(objective["order"]) < current_order
+    ]
+    evaluations: list[dict] = []
+    accepted_events: dict[str, dict] = {}
+    for event in events:
+        if event.get("event_type") == "accepted" and isinstance(event.get("accepted_subject_digest"), str):
+            accepted_events[str(event.get("objective_id"))] = event
+    for objective in candidates:
+        objective_id = str(objective["objective_id"])
+        accepted = accepted_events.get(objective_id)
+        if not accepted:
+            evaluations.append({"objective_id": objective_id, "accepted_current": False, "reason": "objective_not_accepted"})
+            continue
+        try:
+            manifest_reference, digest, projection = load_manifest_opt_in(
+                root,
+                change,
+                objective_id,
+                collaboration["objective_plan"],
+                validation_root_for(root, change),
+            )
+        except ValueError as exc:
+            evaluations.append({"objective_id": objective_id, "accepted_current": False, "reason": str(exc)})
+            continue
+        current_fingerprints = subject_fingerprints(projection)
+        accepted_fingerprints = accepted.get("accepted_subject_fingerprints", {})
+        changed_subject_ids = sorted(
+            subject_id
+            for subject_id in set(current_fingerprints) | set(accepted_fingerprints)
+            if current_fingerprints.get(subject_id) != accepted_fingerprints.get(subject_id)
+        )
+        if accepted.get("accepted_subject_digest") != digest:
+            if not changed_subject_ids:
+                changed_subject_ids = sorted(
+                    set(current_fingerprints) | set(str(value) for value in accepted.get("accepted_subject_ids", []))
+                )
+            evaluations.append(
+                {
+                    "objective_id": objective_id,
+                    "accepted_current": False,
+                    "reason": "accepted_objective_subject_stale",
+                    "accepted_digest": accepted.get("accepted_subject_digest"),
+                    "current_digest": digest,
+                    "changed_subject_ids": changed_subject_ids,
+                    "manifest": manifest_reference,
+                    "accepted_obligations": accepted.get("accepted_obligations", {}),
+                }
+            )
+        else:
+            evaluations.append(
+                {
+                    "objective_id": objective_id,
+                    "accepted_current": True,
+                    "accepted_digest": digest,
+                    "current_digest": digest,
+                    "changed_subject_ids": [],
+                    "manifest": manifest_reference,
+                    "accepted_obligations": accepted.get("accepted_obligations", {}),
+                }
+            )
+    by_id = {entry["objective_id"]: entry for entry in objectives}
+    current_by_id = {entry["objective_id"]: entry for entry in evaluations}
+    for stale in evaluations:
+        if stale.get("reason") != "accepted_objective_subject_stale":
+            continue
+        stale_id = str(stale["objective_id"])
+        replacements: list[str] = []
+        for remediation_id, remediation_eval in current_by_id.items():
+            remediation = by_id.get(remediation_id, {})
+            if not remediation_eval.get("accepted_current") or stale_id not in remediation.get("remediates", []):
+                continue
+            try:
+                _, _, remediation_projection = load_manifest_opt_in(
+                    root,
+                    change,
+                    remediation_id,
+                    collaboration["objective_plan"],
+                    validation_root_for(root, change),
+                )
+            except ValueError:
+                continue
+            if obligations_cover(stale.get("accepted_obligations"), remediation_projection):
+                replacements.append(remediation_id)
+        if replacements:
+            stale["coverage_satisfied"] = True
+            stale["replacement_objective_ids"] = sorted(replacements)
+    return objectives, evaluations
+
+
+def accepted_current_violations(evaluations: list[dict], gate: str) -> list[dict[str, str]]:
+    violations: list[dict[str, str]] = []
+    for evaluation in evaluations:
+        if evaluation.get("accepted_current") or evaluation.get("coverage_satisfied"):
+            continue
+        reason = str(evaluation.get("reason", "objective_not_accepted"))
+        if reason == "accepted_objective_subject_stale":
+            violations.append(
+                item(reason, f"accepted objective 当前证明已失效：{evaluation['objective_id']}（gate={gate}）")
+            )
+        else:
+            violations.append(item(reason, f"required objective 尚无当前有效 acceptance：{evaluation['objective_id']}"))
+    return violations
+
+
+def current_remediation_covers(
+    root: Path, change: str, collaboration: dict[str, str], evaluations: list[dict]
+) -> bool:
+    stale = [entry for entry in evaluations if entry.get("reason") == "accepted_objective_subject_stale"]
+    non_stale = [
+        entry for entry in evaluations
+        if not entry.get("accepted_current") and entry.get("reason") != "accepted_objective_subject_stale"
+    ]
+    if non_stale or not stale:
+        return False
+    try:
+        _, _, current = current_plan_context(
+            root, state_path(root, change).read_text(encoding="utf-8"), change, collaboration
+        )
+        _, _, current_projection = current_subject_context(root, change, collaboration)
+    except ValueError:
+        return False
+    stale_ids = {str(entry["objective_id"]) for entry in stale}
+    if not stale_ids.issubset(set(current.get("remediates", []))):
+        return False
+    for evaluation in stale:
+        if not obligations_cover(evaluation.get("accepted_obligations"), current_projection):
+            evaluation["remediation_reason"] = "remediation_obligation_incomplete"
+            return False
+    for evaluation in stale:
+        evaluation["candidate_covering_objective_ids"] = [collaboration["objective_id"]]
+        evaluation["coverage_pending_acceptance"] = True
+    return True
+
+
+def whole_change_matrix_violations(
+    root: Path, change: str, collaboration: dict[str, str], evaluations: list[dict]
+) -> list[dict[str, str]]:
+    violations: list[dict[str, str]] = []
+    try:
+        objectives, _, _ = current_plan_context(
+            root, state_path(root, change).read_text(encoding="utf-8"), change, collaboration
+        )
+        events = read_events(root, collaboration)
+        required_pairs = set(required_spec_pairs(root, change))
+    except ValueError as exc:
+        return [item(str(exc), "whole-change mapping 无法重算")]
+    evaluation_by_id = {entry["objective_id"]: entry for entry in evaluations}
+    pair_owners: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    subject_ids_by_objective: dict[str, set[str]] = {}
+    evidence_by_subject: dict[str, dict[str, set[str]]] = {}
+    manifest_by_objective: dict[str, str] = {}
+    for objective in objectives:
+        objective_id = str(objective["objective_id"])
+        try:
+            manifest_reference, _, projection = load_manifest_opt_in(
+                root,
+                change,
+                objective_id,
+                collaboration["objective_plan"],
+                validation_root_for(root, change),
+            )
+        except ValueError as exc:
+            violations.append(item(str(exc), f"objective manifest 无法重算：{objective_id}"))
+            continue
+        manifest_by_objective[objective_id] = manifest_reference
+        subject_ids_by_objective[objective_id] = {entry["subject_id"] for entry in projection["subjects"]}
+        evidence_by_subject[objective_id] = {
+            str(entry["subject_id"]): set(str(value) for value in entry.get("required_evidence", []))
+            for entry in projection["subjects"]
+        }
+        try:
+            obligation_pairs = projection_obligation_pairs(projection)
+        except ValueError as exc:
+            violations.append(item(str(exc), f"subject obligations 无效：{objective_id}"))
+            continue
+        for pair in obligation_pairs:
+            owner_subjects = [
+                str(subject["subject_id"])
+                for subject in projection["subjects"]
+                if pair in projection_obligation_pairs({"subjects": [subject]})
+            ]
+            for subject_id in owner_subjects:
+                pair_owners.setdefault(pair, []).append((objective_id, subject_id))
+        required_pairs.update(
+            pair for pair in obligation_pairs if pair[0] == "@composition"
+        )
+
+    accepted_events = {
+        str(event.get("objective_id")): event
+        for event in events
+        if event.get("event_type") == "accepted"
+    }
+    valid_receipts_by_objective: dict[str, dict[str, dict]] = {}
+    for objective in objectives:
+        objective_id = str(objective["objective_id"])
+        evaluation = evaluation_by_id.get(objective_id, {})
+        if evaluation.get("coverage_satisfied"):
+            continue
+        if not evaluation.get("accepted_current"):
+            continue
+        event = accepted_events.get(objective_id, {})
+        references = event.get("evidence_refs", [])
+        if not isinstance(references, list) or not references:
+            violations.append(item("objective_scope_receipt_missing", f"accepted objective 缺少 scope receipts：{objective_id}"))
+            continue
+        objective_collaboration = dict(collaboration)
+        objective_collaboration["objective_id"] = objective_id
+        objective_collaboration["subject_manifest"] = manifest_by_objective.get(objective_id, "")
+        valid_by_ref: dict[str, dict] = {}
+        for reference in references:
+            try:
+                receipt_path = logical_repo_path(root, str(reference), must_exist=True)
+            except (ValueError, FileNotFoundError):
+                violations.append(item("boundary_evidence_missing", f"accepted receipt 不可解析：{reference}"))
+                continue
+            receipt, receipt_violations = validate_receipt(
+                root,
+                receipt_path,
+                objective_collaboration,
+                git_output(root, "rev-parse", "HEAD"),
+                git_output(root, "rev-parse", "HEAD^{tree}"),
+                change=change,
+                expected_gate="review-ready",
+            )
+            violations.extend(receipt_violations)
+            if receipt and not receipt_violations:
+                valid_by_ref[str(reference)] = receipt
+        if not any(receipt.get("verification_tier") == "objective_scope" for receipt in valid_by_ref.values()):
+            violations.append(item("objective_scope_receipt_missing", f"accepted objective 无有效 scope receipt：{objective_id}"))
+        valid_receipts_by_objective[objective_id] = valid_by_ref
+    effective_owners: dict[tuple[str, str], tuple[str, str]] = {}
+    for pair, owners in pair_owners.items():
+        active = []
+        for objective_id, subject_id in owners:
+            evaluation = evaluation_by_id.get(objective_id, {})
+            if evaluation.get("reason") == "accepted_objective_subject_stale" and evaluation.get("coverage_satisfied"):
+                continue
+            active.append((objective_id, subject_id))
+        if len(active) > 1:
+            violations.append(item("spec_mapping_duplicate", f"whole-change spec pair 重复：{pair[0]}/{pair[1]}"))
+        elif len(active) == 1:
+            effective_owners[pair] = active[0]
+    for pair in sorted(required_pairs - set(effective_owners)):
+        violations.append(item("spec_mapping_incomplete", f"whole-change 缺少 delta spec scenario：{pair[0]}/{pair[1]}"))
+    for pair in sorted(set(effective_owners) - required_pairs):
+        violations.append(item("spec_mapping_unknown", f"whole-change 引用了未知 delta spec scenario：{pair[0]}/{pair[1]}"))
+
+    matrix_by_objective: dict[str, str] = {}
+    for event in events:
+        if event.get("event_type") == "objective_planned" and isinstance(event.get("boundary_matrix"), str):
+            matrix_by_objective[str(event.get("objective_id"))] = str(event["boundary_matrix"])
+    rows_by_boundary: dict[str, list[dict[str, str]]] = {}
+    expected_by_objective: dict[str, set[tuple[str, str]]] = {}
+    for pair, (objective_id, _) in effective_owners.items():
+        expected_by_objective.setdefault(objective_id, set()).add(pair)
+    for objective_id, expected in expected_by_objective.items():
+        reference = matrix_by_objective.get(objective_id, "")
+        try:
+            matrix_path = logical_repo_path(root, reference, must_exist=True)
+            top, rows = parse_boundary_matrix(matrix_path)
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            violations.append(item("boundary_matrix_open", f"objective matrix 不可用：{objective_id}: {exc}"))
+            continue
+        if top.get("change_id") != change or top.get("objective_id") != objective_id:
+            violations.append(item("boundary_matrix_invalid", f"objective matrix identity 不匹配：{objective_id}"))
+        actual: dict[tuple[str, str], int] = {}
+        for row in rows:
+            pair = (row.get("requirement_id", ""), row.get("scenario_id", ""))
+            actual[pair] = actual.get(pair, 0) + 1
+            if row.get("status") != "covered":
+                violations.append(item("boundary_matrix_open", f"whole-change matrix row 未闭合：{row.get('row_id', '?')}"))
+            row_subject_ids = set(split_csv(row.get("subject_ids", "")))
+            if not row_subject_ids or not row_subject_ids.issubset(subject_ids_by_objective.get(objective_id, set())):
+                violations.append(item("verification_subject_mapping_mismatch", f"whole-change row subject mapping 无效：{row.get('row_id', '?')}"))
+            required_types = set(split_csv(row.get("required_evidence", "")))
+            manifest_types = set().union(
+                *(evidence_by_subject.get(objective_id, {}).get(subject_id, set()) for subject_id in row_subject_ids)
+            ) if row_subject_ids else set()
+            if not manifest_types.issubset(required_types):
+                violations.append(item("boundary_evidence_missing", f"whole-change row 未声明 manifest required evidence：{row.get('row_id', '?')}"))
+            refs = split_csv(row.get("evidence_refs", ""))
+            valid_by_ref = valid_receipts_by_objective.get(objective_id, {})
+            present_types = {
+                str(valid_by_ref[reference].get("evidence_type"))
+                for reference in refs
+                if reference in valid_by_ref
+            }
+            if not required_types.issubset(present_types):
+                violations.append(item("boundary_evidence_missing", f"whole-change row 缺少 current evidence：{row.get('row_id', '?')}"))
+            rows_by_boundary.setdefault(row.get("boundary_id", ""), []).append(row)
+        if set(actual) != expected:
+            code = "spec_mapping_incomplete" if expected - set(actual) else "spec_mapping_unknown"
+            violations.append(item(code, f"objective matrix spec mapping 不完整：{objective_id}"))
+        if any(count > 1 for count in actual.values()):
+            violations.append(item("spec_mapping_duplicate", f"objective matrix 重复 spec pair：{objective_id}"))
+    for boundary in systemic_boundaries(events):
+        rows = rows_by_boundary.get(boundary, [])
+        if not rows or any(row.get("status") != "covered" for row in rows):
+            violations.append(item("recurrence_upgrade_unresolved", f"whole-change recurrence 未闭合：{boundary}"))
+    return violations
+
+
+def coverage_check(args: argparse.Namespace) -> tuple[dict, int]:
+    context, error = context_or_error("coverage-check", args.change)
+    if error:
+        return error
+    assert context is not None
+    root, _, state_text, collaboration = context
+    if not collaboration.get("objective_plan"):
+        return build_result("coverage-check", None, [], applicable=False, gate=args.gate), 0
+    violations = objective_task_gate_violations(
+        root, state_text, args.change, collaboration, whole_change=args.gate in {"whole-change", "release"}
+    )
+    evaluations: list[dict] = []
+    try:
+        _, evaluations = accepted_current_evaluation(
+            root,
+            state_text,
+            args.change,
+            collaboration,
+            include_current=args.gate in {"whole-change", "release"},
+        )
+        accepted_violations = accepted_current_violations(evaluations, args.gate)
+        if args.gate == "review-ready":
+            if current_remediation_covers(root, args.change, collaboration, evaluations):
+                accepted_violations = [entry for entry in accepted_violations if entry["code"] != "accepted_objective_subject_stale"]
+            elif any(entry.get("remediation_reason") == "remediation_obligation_incomplete" for entry in evaluations):
+                accepted_violations.append(
+                    item("remediation_obligation_incomplete", "当前 remediation objective 未覆盖 predecessor 冻结的完整 obligations")
+                )
+        violations.extend(accepted_violations)
+        if args.gate in {"whole-change", "release"}:
+            violations.extend(whole_change_matrix_violations(root, args.change, collaboration, evaluations))
+    except ValueError as exc:
+        violations.append(item(str(exc), "accepted-current 无法重算"))
+    receipt_results: list[dict] = []
+    if args.gate in {"whole-change", "release"}:
+        receipt_references = list(args.receipt)
+        explicit_receipts = bool(receipt_references)
+        if not receipt_references:
+            expected_tier = "whole_change" if args.gate == "whole-change" else "release"
+            receipts_root = validation_root_for(root, args.change) / "receipts"
+            if receipts_root.is_dir():
+                for candidate in sorted(receipts_root.rglob("*.json")):
+                    try:
+                        payload = load_json_object(candidate)
+                    except ValueError:
+                        continue
+                    if payload.get("verification_tier") == expected_tier and payload.get("change_id") == args.change:
+                        receipt_references.append("repo://" + candidate.relative_to(root).as_posix())
+        if not receipt_references:
+            code = "whole_change_receipt_missing" if args.gate == "whole-change" else "release_receipt_missing"
+            violations.append(item(code, f"{args.gate} gate 缺少对应 tier receipt"))
+        candidate_violations: list[dict[str, str]] = []
+        has_valid_candidate = False
+        for reference in receipt_references:
+            try:
+                receipt_path = logical_repo_path(root, reference, must_exist=True)
+            except (ValueError, FileNotFoundError):
+                current_violations = [item("boundary_evidence_missing", f"gate receipt 不可解析：{reference}")]
+                candidate_violations.extend(current_violations)
+                receipt_results.append(
+                    {"reference": reference, "verification_tier": None, "valid": False,
+                     "blocking_reasons": [entry["code"] for entry in current_violations]}
+                )
+                continue
+            receipt, receipt_violations = validate_receipt(
+                root,
+                receipt_path,
+                collaboration,
+                git_output(root, "rev-parse", "HEAD"),
+                git_output(root, "rev-parse", "HEAD^{tree}"),
+                change=args.change,
+                expected_gate=args.gate,
+            )
+            candidate_violations.extend(receipt_violations)
+            has_valid_candidate = has_valid_candidate or bool(receipt and not receipt_violations)
+            if receipt:
+                receipt_results.append(
+                    {"reference": reference, "verification_tier": receipt.get("verification_tier"),
+                     "valid": not receipt_violations,
+                     "blocking_reasons": [entry["code"] for entry in receipt_violations]}
+                )
+        if explicit_receipts or not has_valid_candidate:
+            violations.extend(candidate_violations)
+    task_codes = {entry["code"] for entry in objective_task_gate_violations(
+        root, state_text, args.change, collaboration, whole_change=args.gate in {"whole-change", "release"}
+    )}
+    implemented = "task_completion_incomplete" not in task_codes
+    return build_result(
+        "coverage-check", None, violations, applicable=True, gate=args.gate,
+        accepted_current=evaluations, receipts=receipt_results,
+        implemented=implemented,
+        closure_pending=implemented and bool(violations),
+        review_ready=collaboration.get("phase") == "review_ready",
+        accepted=collaboration.get("phase") == "accepted",
+        release_ready=args.gate == "release" and not violations,
+        blocking_reasons=[entry["code"] for entry in violations],
+    ), 0 if not violations else 1
+
+
+def mark_implemented(args: argparse.Namespace) -> tuple[dict, int]:
+    context, error = context_or_error("mark-implemented", args.change, recover_history=True)
+    if error:
+        return error
+    assert context is not None
+    root, path, state_text, collaboration = context
+    if not collaboration.get("objective_plan"):
+        return violation_result("mark-implemented", "verification_subject_manifest_missing", "implemented fact 仅用于 manifest path")
+    if collaboration["phase"] not in {"planned", "executing", "checkpoint"}:
+        return violation_result("mark-implemented", "illegal_transition", "当前 lifecycle 不能记录 implemented fact")
+    violations = objective_task_gate_violations(root, state_text, args.change, collaboration)
+    if violations:
+        return build_result(
+            "mark-implemented", None, violations, implemented=False,
+            blocking_reasons=[entry["code"] for entry in violations],
+        ), 1
+    try:
+        manifest_reference, digest, projection = current_subject_context(root, args.change, collaboration)
+        events = read_events(root, collaboration)
+    except ValueError as exc:
+        return violation_result("mark-implemented", str(exc), "implemented subject 无法重算")
+    for event in reversed(events):
+        if event.get("event_type") == "implemented" and event.get("objective_id") == collaboration["objective_id"]:
+            if event.get("subject_digest") == digest:
+                return build_result("mark-implemented", None, [], changed=False, implemented=True, subject_digest=digest), 0
+            break
+    commit_state_event(
+        root,
+        path,
+        state_text,
+        collaboration,
+        "implemented",
+        change_id=args.change,
+        objective_id=collaboration["objective_id"],
+        round_id=collaboration["round_id"],
+        actor="executor",
+        subject_manifest=manifest_reference,
+        subject_digest=digest,
+        subject_ids=sorted(entry["subject_id"] for entry in projection["subjects"]),
+        required_task_ids=sorted(entry["task_id"] for entry in projection["required_tasks"]),
+    )
+    return build_result("mark-implemented", None, [], changed=True, implemented=True, subject_digest=digest), 0
 
 
 def validate_brief(args: argparse.Namespace) -> tuple[dict, int]:
@@ -736,20 +1875,135 @@ def start_objective(args: argparse.Namespace) -> tuple[dict, int]:
         matrix_path = logical_repo_path(root, args.matrix)
     except ValueError as exc:
         return violation_result("start", str(exc), "events/matrix 必须使用安全 repo:// 路径")
-    validation_root = (root / "openspec" / "changes" / args.change / "validation" / "reviewer-executor").resolve()
+    validation_root = validation_root_for(root, args.change)
     if validation_root not in events_path.parents or validation_root not in matrix_path.parents:
         return violation_result("start", "artifact_path_outside_validation_root", "loop artifacts 必须位于 Change validation/reviewer-executor 下")
+    manifest_reference = ""
+    subject_digest = ""
+    manifest_projection: dict = {}
+    if args.objective_plan:
+        try:
+            manifest_reference, subject_digest, manifest_projection = load_manifest_opt_in(
+                root, args.change, args.objective, args.objective_plan, validation_root
+            )
+        except ValueError as exc:
+            return violation_result("start", str(exc), "objective plan 或 subject manifest 无效")
     if not ROUND_ID_RE.fullmatch(args.round):
         return violation_result("start", "round_id_invalid", "round id 必须使用 round-NN")
+    if (
+        args.objective_plan
+        and collaboration["profile"] != PROFILE
+        and int(manifest_projection.get("objective_order", 0)) != 1
+    ):
+        return violation_result("start", "objective_sequence_invalid", "ordered plan 必须从首个 objective 启动")
     if collaboration["profile"] == PROFILE:
         same = (
             collaboration["objective_id"] == args.objective
             and collaboration["round_id"] == args.round
             and collaboration["loop_events"] == args.events
             and collaboration["boundary_matrix"] == args.matrix
+            and collaboration.get("objective_plan", "") == (args.objective_plan or "")
+            and collaboration.get("subject_manifest", "") == manifest_reference
         )
         if not same:
-            return violation_result("start", "objective_conflict", "已有 Reviewer–Executor objective 与请求不一致")
+            if (
+                not args.objective_plan
+                or collaboration.get("objective_plan") != args.objective_plan
+                or collaboration["phase"] != "accepted"
+                or collaboration["objective_id"] == args.objective
+                or args.round != "round-01"
+            ):
+                return violation_result("start", "objective_conflict", "已有 Reviewer–Executor objective 与请求不一致")
+            requested = dict(collaboration)
+            requested["objective_id"] = args.objective
+            requested["round_id"] = args.round
+            requested["subject_manifest"] = manifest_reference
+            try:
+                objectives, _, candidate = current_plan_context(root, text, args.change, requested)
+                current = next(entry for entry in objectives if entry["objective_id"] == collaboration["objective_id"])
+                assignment_violations = objective_assignment_violations(root, collaboration, objectives)
+                if assignment_violations:
+                    return build_result("start", None, assignment_violations, changed=False), 1
+                if int(candidate["order"]) != int(current["order"]) + 1:
+                    return violation_result("start", "objective_sequence_invalid", "只能启动 ordered plan 的下一个 objective")
+                _, predecessor_evaluations = accepted_current_evaluation(
+                    root, text, args.change, requested, include_current=False
+                )
+            except (ValueError, StopIteration) as exc:
+                return violation_result("start", str(exc), "后续 objective 无法验证")
+            invalid_predecessors = [
+                entry for entry in predecessor_evaluations
+                if not entry.get("accepted_current") and not entry.get("coverage_satisfied")
+            ]
+            stale_ids = {
+                str(entry["objective_id"])
+                for entry in invalid_predecessors
+                if entry.get("reason") == "accepted_objective_subject_stale"
+            }
+            non_stale_invalid = [
+                entry for entry in invalid_predecessors if entry.get("reason") != "accepted_objective_subject_stale"
+            ]
+            remediates = set(candidate.get("remediates", []))
+            if non_stale_invalid or (stale_ids and not stale_ids.issubset(remediates)):
+                violations = accepted_current_violations(invalid_predecessors, "start-subsequent")
+                return build_result(
+                    "start", None, violations, changed=False,
+                    blocking_reasons=[entry["code"] for entry in violations],
+                    accepted_current=predecessor_evaluations,
+                ), 1
+            candidate_subject_ids = {entry["subject_id"] for entry in manifest_projection.get("subjects", [])}
+            for stale_id in stale_ids:
+                try:
+                    _, _, stale_projection = load_manifest_opt_in(
+                        root, args.change, stale_id, args.objective_plan, validation_root
+                    )
+                except ValueError as exc:
+                    return violation_result("start", str(exc), "remediation predecessor subject 无法重算")
+                stale_subject_ids = {entry["subject_id"] for entry in stale_projection.get("subjects", [])}
+                if not stale_subject_ids.issubset(candidate_subject_ids):
+                    return violation_result(
+                        "start", "accepted_objective_subject_stale", "remediation objective 未完整覆盖 stale predecessor subjects"
+                    )
+            collaboration.update(
+                {
+                    "objective_id": args.objective,
+                    "round_id": args.round,
+                    "phase": "planned",
+                    "boundary_matrix": args.matrix,
+                    "latest_report": "",
+                    "latest_receipts": "[]",
+                    "termination": "",
+                    "subject_manifest": manifest_reference,
+                }
+            )
+            commit_state_event(
+                root,
+                path,
+                text,
+                collaboration,
+                "objective_planned",
+                change_id=args.change,
+                objective_id=args.objective,
+                round_id=args.round,
+                actor="reviewer",
+                objective_order=manifest_projection.get("objective_order"),
+                objective_purpose=manifest_projection.get("objective_purpose"),
+                required_task_ids=[entry["task_id"] for entry in manifest_projection.get("required_tasks", [])],
+                subject_digest=subject_digest,
+                subject_ids=sorted(candidate_subject_ids),
+                remediates=sorted(remediates),
+                boundary_matrix=args.matrix,
+            )
+            return build_result(
+                "start", None, [], applicable=True, changed=True, phase="planned",
+                manifest_enabled=True, subject_digest=subject_digest,
+                stale_predecessors=sorted(stale_ids), remediation=bool(stale_ids),
+            ), 0
+        if args.objective_plan:
+            return build_result(
+                "start", None, [], applicable=True, changed=False, phase=collaboration["phase"],
+                manifest_enabled=True, subject_digest=subject_digest,
+            ), 0
         return build_result("start", None, [], applicable=True, changed=False, phase=collaboration["phase"]), 0
 
     collaboration.update(
@@ -765,7 +2019,24 @@ def start_objective(args: argparse.Namespace) -> tuple[dict, int]:
             "termination": "",
         }
     )
+    if args.objective_plan:
+        collaboration.update(
+            {
+                "objective_plan": args.objective_plan,
+                "subject_manifest": manifest_reference,
+            }
+        )
     events_path.parent.mkdir(parents=True, exist_ok=True)
+    event_fields: dict[str, object] = {}
+    if args.objective_plan:
+        event_fields = {
+            "objective_order": manifest_projection.get("objective_order"),
+            "objective_purpose": manifest_projection.get("objective_purpose"),
+            "required_task_ids": [entry["task_id"] for entry in manifest_projection.get("required_tasks", [])],
+            "subject_digest": subject_digest,
+            "subject_ids": [entry["subject_id"] for entry in manifest_projection.get("subjects", [])],
+            "boundary_matrix": args.matrix,
+        }
     commit_state_event(
         root,
         path,
@@ -776,7 +2047,13 @@ def start_objective(args: argparse.Namespace) -> tuple[dict, int]:
         objective_id=args.objective,
         round_id=args.round,
         actor="reviewer",
+        **event_fields,
     )
+    if args.objective_plan:
+        return build_result(
+            "start", None, [], applicable=True, changed=True, phase="planned",
+            manifest_enabled=True, subject_digest=subject_digest,
+        ), 0
     return build_result("start", None, [], applicable=True, changed=True, phase="planned"), 0
 
 
@@ -803,10 +2080,41 @@ def transition_objective(args: argparse.Namespace) -> tuple[dict, int]:
         ), 0
     if args.to not in LEGAL_TRANSITIONS.get(current, set()):
         return violation_result("transition", "illegal_transition", f"非法 round transition：{current} -> {args.to}", phase=current)
-    if args.to == "blocked" and not args.blocker:
-        return violation_result("transition", "blocker_evidence_missing", "blocked transition 必须说明真实 blocker", phase=current)
-    if args.to == "blocked" and not BLOCKER_ALLOWED_RE.search(args.blocker):
-        return violation_result("transition", "blocker_out_of_scope", "普通测试失败或实现困难不是 blocker", phase=current)
+    blocker_fields: dict[str, object] = {}
+    if args.to == "blocked":
+        if collaboration.get("objective_plan"):
+            if (
+                args.blocker_category not in STRUCTURED_BLOCKER_CATEGORIES
+                or not args.blocker_code
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.blocker_code)
+                or not args.required_decision
+            ):
+                return violation_result("transition", "blocker_out_of_scope", "manifest path blocked 必须使用允许的 structured blocker")
+            try:
+                _, _, projection = current_subject_context(root, args.change, collaboration)
+                current_subject_ids = {entry["subject_id"] for entry in projection["subjects"]}
+            except ValueError as exc:
+                return violation_result("transition", str(exc), "structured blocker subject 无法验证")
+            affected_subjects = sorted(set(args.affected_subject))
+            if not affected_subjects or not set(affected_subjects).issubset(current_subject_ids):
+                return violation_result("transition", "verification_subject_mapping_mismatch", "blocker affected subjects 不属于当前 objective")
+            for reference in args.evidence_ref:
+                try:
+                    logical_repo_path(root, reference, must_exist=True)
+                except (ValueError, FileNotFoundError):
+                    return violation_result("transition", "blocker_evidence_missing", "structured blocker evidence 不可解析")
+            blocker_fields = {
+                "blocker_category": args.blocker_category,
+                "blocker_code": args.blocker_code,
+                "affected_subjects": affected_subjects,
+                "evidence_refs": args.evidence_ref,
+                "required_decision": args.required_decision,
+            }
+        else:
+            if not args.blocker:
+                return violation_result("transition", "blocker_evidence_missing", "blocked transition 必须说明真实 blocker", phase=current)
+            if not BLOCKER_ALLOWED_RE.search(args.blocker):
+                return violation_result("transition", "blocker_out_of_scope", "普通测试失败或实现困难不是 blocker", phase=current)
     collaboration["phase"] = args.to
     commit_state_event(
         root,
@@ -819,6 +2127,7 @@ def transition_objective(args: argparse.Namespace) -> tuple[dict, int]:
         round_id=collaboration["round_id"],
         actor="executor",
         blocker=args.blocker or "",
+        **blocker_fields,
         from_phase=current,
         to_phase=args.to,
     )
@@ -926,7 +2235,8 @@ def sha256_file(path: Path) -> str:
 
 
 def validate_receipt(
-    root: Path, receipt_path: Path, collaboration: dict[str, str], expected_commit: str, expected_tree: str
+    root: Path, receipt_path: Path, collaboration: dict[str, str], expected_commit: str, expected_tree: str,
+    *, change: str = "", expected_gate: str | None = None,
 ) -> tuple[dict | None, list[dict[str, str]]]:
     violations: list[dict[str, str]] = []
     try:
@@ -951,17 +2261,50 @@ def validate_receipt(
     )
     if not isinstance(receipt, dict) or any(key not in receipt for key in required):
         return None, [item("receipt_schema_invalid", f"receipt 字段不完整：{receipt_path}")]
-    if receipt["git_commit"] != expected_commit:
-        violations.append(item("receipt_commit_stale", f"receipt commit 与当前 commit 不一致：{receipt_path}"))
-    if receipt.get("source_tree") != expected_tree:
-        violations.append(item("receipt_source_tree_stale", f"receipt source tree 与当前源码不一致：{receipt_path}"))
-    if receipt["cwd"] != str(root):
-        violations.append(item("receipt_cwd_mismatch", f"receipt cwd 与当前代码根不一致：{receipt_path}"))
-    if receipt["isolation_id"] != str(root):
-        violations.append(item("receipt_isolation_mismatch", f"receipt isolation 与当前 worktree 不一致：{receipt_path}"))
+    manifest_enabled = bool(collaboration.get("objective_plan") and collaboration.get("subject_manifest"))
+    projection: dict = {}
+    if manifest_enabled:
+        extra_required = ("change_id", "objective_id", "manifest", "subject_digest", "subject_ids", "verification_tier", "host")
+        if any(key not in receipt for key in extra_required):
+            violations.append(item("receipt_schema_invalid", f"manifest receipt 字段不完整：{receipt_path}"))
+        else:
+            try:
+                manifest_reference, current_digest, projection = verification_subject_context(
+                    root, change, collaboration, expected_gate
+                )
+            except ValueError as exc:
+                violations.append(item(str(exc), "当前 verification subject 无法重算"))
+            else:
+                if receipt.get("change_id") != change or receipt.get("objective_id") != collaboration["objective_id"]:
+                    violations.append(item("receipt_objective_mismatch", f"receipt change/objective 不匹配：{receipt_path}"))
+                if receipt.get("manifest") != manifest_reference:
+                    violations.append(item("verification_subject_mapping_mismatch", f"receipt manifest pointer 不匹配：{receipt_path}"))
+                if receipt.get("subject_digest") != current_digest:
+                    violations.append(item("verification_subject_digest_mismatch", f"receipt subject digest 已失效：{receipt_path}"))
+                expected_subject_ids = sorted(entry["subject_id"] for entry in projection["subjects"])
+                if sorted(receipt.get("subject_ids", [])) != expected_subject_ids:
+                    violations.append(item("verification_subject_mapping_mismatch", f"receipt subject IDs 不完整：{receipt_path}"))
+                expected_tier = next(
+                    (tier for tier, gate in VERIFICATION_TIER_GATES.items() if gate == expected_gate), None
+                )
+                if expected_tier and receipt.get("verification_tier") != expected_tier:
+                    violations.append(item("verification_tier_not_eligible", f"receipt tier 不适用于 {expected_gate}：{receipt_path}"))
+                if not receipt_provenance_authorized(root, receipt, projection):
+                    violations.append(item("receipt_provenance_unauthorized", f"receipt provenance 未获 verification contract 授权：{receipt_path}"))
+    else:
+        if receipt["git_commit"] != expected_commit:
+            violations.append(item("receipt_commit_stale", f"receipt commit 与当前 commit 不一致：{receipt_path}"))
+        if receipt.get("source_tree") != expected_tree:
+            violations.append(item("receipt_source_tree_stale", f"receipt source tree 与当前源码不一致：{receipt_path}"))
+        if receipt["cwd"] != str(root):
+            violations.append(item("receipt_cwd_mismatch", f"receipt cwd 与当前代码根不一致：{receipt_path}"))
+        if receipt["isolation_id"] != str(root):
+            violations.append(item("receipt_isolation_mismatch", f"receipt isolation 与当前 worktree 不一致：{receipt_path}"))
     if receipt["exit_code"] != 0 or receipt["result"] != "passed":
         violations.append(item("receipt_result_failed", f"receipt 未通过：{receipt_path}"))
-    if receipt.get("objective_id") != collaboration["objective_id"] or receipt.get("round_id") != collaboration["round_id"]:
+    if not manifest_enabled and (
+        receipt.get("objective_id") != collaboration["objective_id"] or receipt.get("round_id") != collaboration["round_id"]
+    ):
         violations.append(item("receipt_round_mismatch", f"receipt objective/round 与当前状态不一致：{receipt_path}"))
     if not isinstance(receipt["command"], list) or not receipt["command"]:
         violations.append(item("receipt_schema_invalid", f"receipt command 必须是 argv：{receipt_path}"))
@@ -974,9 +2317,11 @@ def validate_receipt(
             try:
                 artifact_path = logical_repo_path(root, artifact["path"], must_exist=True)
                 if sha256_file(artifact_path) != artifact["sha256"]:
-                    violations.append(item("receipt_artifact_hash_mismatch", f"artifact hash 不一致：{artifact['path']}"))
+                    code = "receipt_artifact_integrity_invalid" if manifest_enabled else "receipt_artifact_hash_mismatch"
+                    violations.append(item(code, f"artifact hash 不一致：{artifact['path']}"))
             except (KeyError, TypeError, ValueError, FileNotFoundError):
-                violations.append(item("boundary_evidence_missing", f"receipt artifact 不可解析：{artifact}"))
+                code = "receipt_artifact_integrity_invalid" if manifest_enabled else "boundary_evidence_missing"
+                violations.append(item(code, f"receipt artifact 不可解析：{artifact}"))
     return receipt, violations
 
 
@@ -988,14 +2333,66 @@ def run_receipt(args: argparse.Namespace) -> tuple[dict, int]:
     root, _, text, collaboration = context
     if collaboration["profile"] != PROFILE:
         return violation_result("run-receipt", "profile_not_active", "Reviewer–Executor profile 未启用")
+    manifest_enabled = bool(collaboration.get("objective_plan") and collaboration.get("subject_manifest"))
     dirty_source = non_evidence_dirty_paths(root, args.change)
-    if dirty_source:
+    if dirty_source and not manifest_enabled:
         return violation_result(
             "run-receipt", "source_worktree_dirty", "存在 receipts 无法覆盖的源码漂移", dirty_paths=dirty_source
         )
     implementation = yaml_nested_values(text, "implementation")
-    if implementation.get("isolation") != "worktree" or Path(implementation.get("worktree_path", "")).resolve() != root:
+    if not manifest_enabled and (
+        implementation.get("isolation") != "worktree" or Path(implementation.get("worktree_path", "")).resolve() != root
+    ):
         return violation_result("run-receipt", "receipt_isolation_mismatch", "当前 worktree 与 state isolation 不一致")
+    manifest_reference = ""
+    current_digest = ""
+    subject_ids: list[str] = []
+    projection: dict = {}
+    if manifest_enabled:
+        if not args.verification_tier or not args.gate or not args.host:
+            return violation_result("run-receipt", "verification_tier_not_eligible", "manifest receipt 必须声明 tier、gate 与 host")
+        if VERIFICATION_TIER_GATES.get(args.verification_tier) != args.gate:
+            return violation_result("run-receipt", "verification_tier_not_eligible", "verification tier 与 gate owner 不匹配")
+        if args.verification_tier == "checkpoint_targeted" and collaboration["phase"] != "checkpoint":
+            return violation_result("run-receipt", "verification_tier_not_eligible", "checkpoint receipt 只能在 checkpoint phase 生成")
+        if args.verification_tier == "objective_scope" and collaboration["phase"] not in {"executing", "checkpoint"}:
+            return violation_result("run-receipt", "verification_tier_not_eligible", "objective scope receipt 只能在 review-ready 申请时生成")
+        if args.verification_tier in {"whole_change", "release"}:
+            if collaboration["phase"] != "accepted":
+                return violation_result(
+                    "run-receipt", "verification_tier_not_eligible",
+                    "whole-change/release receipt 只能在最后一个 objective accepted 后的对应 Change gate 生成",
+                )
+            preflight = objective_task_gate_violations(
+                root, text, args.change, collaboration, whole_change=True
+            )
+            try:
+                _, evaluations = accepted_current_evaluation(
+                    root, text, args.change, collaboration, include_current=True
+                )
+                preflight.extend(accepted_current_violations(evaluations, args.gate))
+            except ValueError as exc:
+                preflight.append(item(str(exc), "Change gate verification subject 无法重算"))
+            if preflight:
+                return build_result(
+                    "run-receipt", None, preflight, changed=False,
+                    blocking_reasons=[entry["code"] for entry in preflight],
+                ), 1
+        try:
+            manifest_reference, current_digest, projection = verification_subject_context(
+                root, args.change, collaboration, args.gate
+            )
+        except ValueError as exc:
+            return violation_result("run-receipt", str(exc), "当前 verification subject 无法重算")
+        subject_ids = sorted(entry["subject_id"] for entry in projection["subjects"])
+        provisional = {
+            "cwd": str(root),
+            "host": args.host,
+            "isolation_id": str(root),
+            "subject_ids": subject_ids,
+        }
+        if not receipt_provenance_authorized(root, provisional, projection):
+            return violation_result("run-receipt", "receipt_provenance_unauthorized", "当前 provenance 未获 verification contract 授权")
     command = list(args.argv)
     if command and command[0] == "--":
         command = command[1:]
@@ -1003,7 +2400,7 @@ def run_receipt(args: argparse.Namespace) -> tuple[dict, int]:
         return violation_result("run-receipt", "receipt_command_missing", "-- 后必须提供命令 argv")
     try:
         output = logical_repo_path(root, args.output)
-        validation_root = (root / "openspec" / "changes" / args.change / "validation" / "reviewer-executor").resolve()
+        validation_root = validation_root_for(root, args.change)
         if validation_root not in output.parents:
             raise ValueError("receipt_path_outside_validation_root")
         artifacts = [
@@ -1038,12 +2435,48 @@ def run_receipt(args: argparse.Namespace) -> tuple[dict, int]:
         "stdout_sha256": hashlib.sha256(completed.stdout).hexdigest(),
         "stderr_sha256": hashlib.sha256(completed.stderr).hexdigest(),
     }
+    if manifest_enabled:
+        receipt.update(
+            {
+                "manifest": manifest_reference,
+                "subject_digest": current_digest,
+                "subject_ids": subject_ids,
+                "verification_tier": args.verification_tier,
+                "host": args.host,
+            }
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
     temp = output.with_name(f".{output.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temp, output)
     result = build_result("run-receipt", str(output), [], receipt=receipt)
     return result, completed.returncode
+
+
+def receipt_check(args: argparse.Namespace) -> tuple[dict, int]:
+    context, error = context_or_error("receipt-check", args.change)
+    if error:
+        return error
+    assert context is not None
+    root, _, _, collaboration = context
+    try:
+        receipt_path = logical_repo_path(root, args.receipt, must_exist=True)
+    except (ValueError, FileNotFoundError):
+        return violation_result("receipt-check", "boundary_evidence_missing", "receipt 不可解析")
+    receipt, violations = validate_receipt(
+        root,
+        receipt_path,
+        collaboration,
+        git_output(root, "rev-parse", "HEAD"),
+        git_output(root, "rev-parse", "HEAD^{tree}"),
+        change=args.change,
+        expected_gate=args.gate,
+    )
+    return build_result(
+        "receipt-check", str(receipt_path), violations, reusable=not violations,
+        receipt_round=receipt.get("round_id") if receipt else None,
+        blocking_reasons=[entry["code"] for entry in violations],
+    ), 0 if not violations else 1
 
 
 def systemic_boundaries(events: list[dict]) -> set[str]:
@@ -1070,17 +2503,33 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
 
     violations: list[dict[str, str]] = []
     dirty_source = non_evidence_dirty_paths(root, args.change)
-    if dirty_source:
+    manifest_enabled = bool(collaboration.get("objective_plan") and collaboration.get("subject_manifest"))
+    if dirty_source and not manifest_enabled:
         violations.append(item("source_worktree_dirty", "存在 receipts 之后的非证据源码漂移"))
     tasks_reference = yaml_nested_values(text, "openspec").get("tasks_path", "")
     tasks_repo_reference = tasks_reference if tasks_reference.startswith("repo://") else f"repo://{tasks_reference}"
-    try:
-        tasks_path = logical_repo_path(root, tasks_reference) if tasks_reference.startswith("repo://") else (root / tasks_reference).resolve()
-        tasks_text = tasks_path.read_text(encoding="utf-8")
-        if re.search(r"^[ \t]*- \[ \]", tasks_text, re.M):
-            violations.append(item("task_completion_incomplete", "OpenSpec required tasks 仍有未完成项"))
-    except OSError:
-        violations.append(item("task_completion_incomplete", "OpenSpec tasks 文件不可读"))
+    if manifest_enabled:
+        violations.extend(objective_task_gate_violations(root, text, args.change, collaboration))
+        try:
+            _, predecessor_evaluations = accepted_current_evaluation(
+                root, text, args.change, collaboration, include_current=False
+            )
+            predecessor_violations = accepted_current_violations(predecessor_evaluations, "review-ready")
+            if current_remediation_covers(root, args.change, collaboration, predecessor_evaluations):
+                predecessor_violations = [
+                    entry for entry in predecessor_violations if entry["code"] != "accepted_objective_subject_stale"
+                ]
+            violations.extend(predecessor_violations)
+        except ValueError as exc:
+            violations.append(item(str(exc), "accepted predecessors 无法重算"))
+    else:
+        try:
+            tasks_path = logical_repo_path(root, tasks_reference) if tasks_reference.startswith("repo://") else (root / tasks_reference).resolve()
+            tasks_text = tasks_path.read_text(encoding="utf-8")
+            if re.search(r"^[ \t]*- \[ \]", tasks_text, re.M):
+                violations.append(item("task_completion_incomplete", "OpenSpec required tasks 仍有未完成项"))
+        except OSError:
+            violations.append(item("task_completion_incomplete", "OpenSpec tasks 文件不可读"))
 
     report_text = ""
     report_links: set[str] = set()
@@ -1127,15 +2576,59 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
             violations.append(item("boundary_matrix_invalid", "matrix schema/change 不匹配"))
         if top.get("objective_id") != collaboration["objective_id"] or top.get("round_id") != collaboration["round_id"]:
             violations.append(item("boundary_matrix_invalid", "matrix objective/round 不匹配"))
+        expected_subject_ids: set[str] = set()
+        expected_evidence_by_subject: dict[str, set[str]] = {}
+        matrix_subject_ids: set[str] = set()
+        if manifest_enabled:
+            try:
+                manifest_reference, current_digest, projection = current_subject_context(root, args.change, collaboration)
+                expected_subject_ids = {entry["subject_id"] for entry in projection["subjects"]}
+                expected_evidence_by_subject = {
+                    str(entry["subject_id"]): set(str(value) for value in entry.get("required_evidence", []))
+                    for entry in projection["subjects"]
+                }
+                if top.get("subject_manifest") != manifest_reference or top.get("subject_digest") != current_digest:
+                    violations.append(item("verification_subject_mapping_mismatch", "matrix manifest pointer/digest 与当前 objective 不一致"))
+            except ValueError as exc:
+                violations.append(item(str(exc), "当前 verification subject 无法重算"))
         if not rows:
             violations.append(item("boundary_matrix_open", "matrix 没有 required rows"))
-        required_pairs = required_spec_pairs(root, args.change)
+        all_spec_pairs = required_spec_pairs(root, args.change)
+        required_pairs = all_spec_pairs
+        if manifest_enabled and "projection" in locals():
+            try:
+                declared_pairs = projection_obligation_pairs(projection)
+            except ValueError as exc:
+                violations.append(item(str(exc), "current objective obligations 无法解析"))
+                declared_pairs = set()
+            unknown_declared = {
+                pair for pair in declared_pairs
+                if pair[0] != "@composition" and pair not in all_spec_pairs
+            }
+            for pair in sorted(unknown_declared):
+                violations.append(item("spec_mapping_unknown", f"manifest 引用了未知 delta spec scenario：{pair[0]}/{pair[1]}"))
+            required_pairs = {
+                pair: all_spec_pairs.get(pair, "manifest-composition")
+                for pair in declared_pairs
+                if pair[0] == "@composition" or pair in all_spec_pairs
+            }
         row_pairs: dict[tuple[str, str], list[str]] = {}
         for row in rows:
             required_keys = ("row_id", "requirement_id", "scenario_id", "boundary_id", "owner", "invariant", "required_evidence", "evidence_refs", "status")
             if any(not row.get(key) for key in required_keys):
                 violations.append(item("boundary_matrix_invalid", f"matrix row 字段不完整：{row.get('row_id', row.get('_line', '?'))}"))
                 continue
+            if manifest_enabled:
+                row_subject_ids = set(split_csv(row.get("subject_ids", "")))
+                if not row_subject_ids:
+                    violations.append(item("verification_subject_mapping_mismatch", f"matrix row 缺少 subject IDs：{row.get('row_id', '?')}"))
+                matrix_subject_ids.update(row_subject_ids)
+                declared_types = set(split_csv(row.get("required_evidence", "")))
+                manifest_types = set().union(
+                    *(expected_evidence_by_subject.get(subject_id, set()) for subject_id in row_subject_ids)
+                ) if row_subject_ids else set()
+                if not manifest_types.issubset(declared_types):
+                    violations.append(item("boundary_evidence_missing", f"matrix row 未声明 manifest required evidence：{row.get('row_id', '?')}"))
             pair = (row["requirement_id"], row["scenario_id"])
             row_pairs.setdefault(pair, []).append(row.get("row_id", row.get("_line", "?")))
             if row["status"] in {"open", "failed"}:
@@ -1157,6 +2650,8 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
             violations.append(item("spec_mapping_unknown", f"matrix 引用了未知 delta spec scenario：{pair[0]}/{pair[1]}"))
         for pair in duplicate_pairs:
             violations.append(item("spec_mapping_duplicate", f"matrix 重复映射 delta spec scenario：{pair[0]}/{pair[1]}"))
+        if manifest_enabled and matrix_subject_ids != expected_subject_ids:
+            violations.append(item("verification_subject_mapping_mismatch", "matrix subject IDs 未完整且唯一映射当前 manifest"))
 
         diff_base = top.get("diff_base", "")
         diff_reference = top.get("diff_artifact", "")
@@ -1167,20 +2662,55 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
             if resolved_base != diff_base:
                 raise ValueError("diff_base_invalid")
             diff_path = logical_repo_path(root, diff_reference, must_exist=True)
+            # Review identity is the complete tracked workspace projection from
+            # the approved base, not only committed HEAD.  This includes index
+            # and working-tree bytes that formal verification may have read.
+            diff_identity = diff_base if manifest_enabled else f"{diff_base}..HEAD"
             expected_diff = subprocess.run(
-                ["git", "-C", str(root), "diff", "--binary", f"{diff_base}..HEAD"],
+                ["git", "-C", str(root), "diff", "--binary", diff_identity],
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             ).stdout
             if diff_path.read_bytes() != expected_diff:
-                violations.append(item("diff_evidence_invalid", "matrix diff artifact 不是 diff_base 到当前 HEAD 的精确差异"))
+                expected_scope = "当前 tracked workspace" if manifest_enabled else "当前 HEAD"
+                violations.append(item("diff_evidence_invalid", f"matrix diff artifact 不是 diff_base 到{expected_scope}的精确差异"))
+            if manifest_enabled and "projection" in locals():
+                review_sources = {
+                    logical_repo_path(root, manifest_reference, must_exist=True),
+                    logical_repo_path(root, collaboration["objective_plan"], must_exist=True),
+                    logical_repo_path(root, tasks_repo_reference, must_exist=True),
+                }
+                for subject in projection.get("subjects", []):
+                    for source in subject.get("semantic_inputs", []):
+                        review_sources.add(logical_repo_path(root, source["path"], must_exist=True))
+                    for reference in subject.get("refs", []):
+                        target = logical_repo_path(root, reference, must_exist=False)
+                        if target.is_file():
+                            review_sources.add(target)
+                untracked_sources = []
+                for source in sorted(review_sources):
+                    relative = source.relative_to(root).as_posix()
+                    tracked = subprocess.run(
+                        ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", relative],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if tracked.returncode != 0:
+                        untracked_sources.append(relative)
+                if untracked_sources:
+                    violations.append(item(
+                        "verification_subject_diff_incomplete",
+                        "canonical subject 含未进入 tracked review diff 的文件：" + ", ".join(untracked_sources),
+                    ))
         except (ValueError, FileNotFoundError, OSError, subprocess.CalledProcessError):
             violations.append(item("diff_evidence_invalid", "matrix diff_base/diff_artifact 不可解析"))
     except (ValueError, FileNotFoundError, OSError) as exc:
         violations.append(item("boundary_matrix_open", f"matrix 不可用：{exc}"))
 
     required_report_links = {tasks_repo_reference, matrix_reference}
+    if manifest_enabled and 'manifest_reference' in locals():
+        required_report_links.add(manifest_reference)
     if 'diff_reference' in locals() and diff_reference:
         required_report_links.add(diff_reference)
     required_report_links.update(receipt_refs)
@@ -1188,6 +2718,7 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         violations.append(item("report_evidence_link_missing", f"Execution Report 缺少精确证据链接：{reference}"))
 
     receipts: list[dict] = []
+    valid_receipts: list[dict] = []
     receipts_by_ref: dict[str, dict] = {}
     expected_commit = git_output(root, "rev-parse", "HEAD")
     expected_tree = git_output(root, "rev-parse", "HEAD^{tree}")
@@ -1197,11 +2728,18 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         except (ValueError, FileNotFoundError):
             violations.append(item("boundary_evidence_missing", f"matrix evidence 不存在：{reference}"))
             continue
-        receipt, receipt_violations = validate_receipt(root, receipt_path, collaboration, expected_commit, expected_tree)
+        receipt, receipt_violations = validate_receipt(
+            root, receipt_path, collaboration, expected_commit, expected_tree,
+            change=args.change, expected_gate="review-ready",
+        )
         violations.extend(receipt_violations)
         if receipt:
             receipts.append(receipt)
             receipts_by_ref[reference] = receipt
+            if not receipt_violations:
+                valid_receipts.append(receipt)
+    if manifest_enabled and not any(receipt.get("verification_tier") == "objective_scope" for receipt in valid_receipts):
+        violations.append(item("objective_scope_receipt_missing", "当前 objective 缺少有效 objective_scope receipt"))
 
     batches: dict[str, list[int]] = {}
     for receipt in receipts:
@@ -1230,12 +2768,8 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         violations.append(item("event_log_invalid", str(exc)))
         events = []
     for boundary in systemic_boundaries(events):
-        if not any(
-            row.get("boundary_id") == boundary
-            and row.get("status") == "covered"
-            and row.get("systemic_closure") == "true"
-            for row in rows
-        ):
+        boundary_rows = [row for row in rows if row.get("boundary_id") == boundary]
+        if not boundary_rows or any(row.get("status") != "covered" for row in boundary_rows):
             violations.append(item("recurrence_upgrade_unresolved", f"复发边界尚未证明系统性闭合：{boundary}"))
 
     if violations:
@@ -1250,6 +2784,20 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         collaboration["phase"] = "review_ready"
         collaboration["latest_report"] = report_reference
         collaboration["latest_receipts"] = "[" + ",".join(dict.fromkeys(receipt_refs)) + "]"
+        ready_subject_fields: dict[str, object] = {}
+        if manifest_enabled:
+            ready_subject_fields = {
+                "subject_manifest": manifest_reference,
+                "subject_digest": current_digest,
+                "subject_ids": sorted(expected_subject_ids),
+                "subject_fingerprints": subject_fingerprints(projection),
+                "subject_obligations": subject_obligations(projection),
+            }
+        review_artifact_hashes = {
+            report_reference: sha256_file(report_path),
+            matrix_reference: sha256_file(matrix_path),
+            diff_reference: sha256_file(diff_path),
+        }
         commit_state_event(
             root,
             path,
@@ -1262,6 +2810,8 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
             actor="executor",
             report=collaboration["latest_report"],
             receipts=list(dict.fromkeys(receipt_refs)),
+            review_artifact_hashes=review_artifact_hashes,
+            **ready_subject_fields,
         )
     return build_result(
         "review-ready", None, [], applicable=True, changed=not already_ready, phase="review_ready",
@@ -1351,6 +2901,117 @@ def review_decision(args: argparse.Namespace) -> tuple[dict, int]:
             feedback=feedback_reference,
         )
     elif args.decision == "accepted":
+        acceptance_fields: dict[str, object] = {}
+        if collaboration.get("objective_plan"):
+            try:
+                manifest_reference, digest, projection = current_subject_context(root, args.change, collaboration)
+                events = read_events(root, collaboration)
+            except ValueError as exc:
+                return violation_result("review-decision", str(exc), "accepted subject 无法冻结")
+            ready_event = next(
+                (
+                    event for event in reversed(events)
+                    if event.get("event_type") == "review_ready_passed"
+                    and event.get("objective_id") == collaboration["objective_id"]
+                    and event.get("round_id") == collaboration["round_id"]
+                ),
+                None,
+            )
+            current_subject_ids = sorted(entry["subject_id"] for entry in projection["subjects"])
+            if (
+                not ready_event
+                or ready_event.get("subject_manifest") != manifest_reference
+                or ready_event.get("subject_digest") != digest
+                or ready_event.get("subject_ids") != current_subject_ids
+            ):
+                return violation_result(
+                    "review-decision",
+                    "verification_subject_digest_mismatch",
+                    "当前 subject 与通过 review-ready 的冻结对象不一致",
+                    changed=False,
+                    phase="review_ready",
+                )
+            frozen_artifacts = ready_event.get("review_artifact_hashes")
+            if (
+                ready_event.get("report") != collaboration.get("latest_report")
+                or not isinstance(frozen_artifacts, dict)
+                or not frozen_artifacts
+            ):
+                return violation_result(
+                    "review-decision",
+                    "review_ready_evidence_changed",
+                    "review-ready 下游证据快照缺失或 identity 已改变",
+                    changed=False,
+                    phase="review_ready",
+                )
+            try:
+                artifact_changed = any(
+                    not isinstance(reference, str)
+                    or not isinstance(expected_hash, str)
+                    or sha256_file(logical_repo_path(root, reference, must_exist=True)) != expected_hash
+                    for reference, expected_hash in frozen_artifacts.items()
+                )
+            except (ValueError, FileNotFoundError, OSError):
+                artifact_changed = True
+            if artifact_changed:
+                return violation_result(
+                    "review-decision",
+                    "review_ready_evidence_changed",
+                    "Report、boundary matrix 或 diff 已不再等于通过 review-ready 的证据",
+                    changed=False,
+                    phase="review_ready",
+                )
+            ready_receipts = ready_event.get("receipts", [])
+            if (
+                not isinstance(ready_receipts, list)
+                or ready_receipts != split_csv(collaboration.get("latest_receipts", ""))
+            ):
+                return violation_result(
+                    "review-decision",
+                    "objective_scope_receipt_missing",
+                    "当前 receipt 集合与通过 review-ready 的冻结集合不一致",
+                    changed=False,
+                    phase="review_ready",
+                )
+            receipt_violations: list[dict[str, str]] = []
+            valid_receipts: list[dict] = []
+            for reference in ready_receipts:
+                try:
+                    receipt_path = logical_repo_path(root, str(reference), must_exist=True)
+                except (ValueError, FileNotFoundError):
+                    receipt_violations.append(item("boundary_evidence_missing", f"review-ready receipt 不可解析：{reference}"))
+                    continue
+                receipt, current_violations = validate_receipt(
+                    root,
+                    receipt_path,
+                    collaboration,
+                    git_output(root, "rev-parse", "HEAD"),
+                    git_output(root, "rev-parse", "HEAD^{tree}"),
+                    change=args.change,
+                    expected_gate="review-ready",
+                )
+                receipt_violations.extend(current_violations)
+                if receipt and not current_violations:
+                    valid_receipts.append(receipt)
+            if not any(receipt.get("verification_tier") == "objective_scope" for receipt in valid_receipts):
+                receipt_violations.append(item("objective_scope_receipt_missing", "冻结的 review-ready receipt 集合无有效 objective_scope 证据"))
+            if receipt_violations:
+                return build_result(
+                    "review-decision",
+                    None,
+                    receipt_violations,
+                    changed=False,
+                    phase="review_ready",
+                    blocking_reasons=[entry["code"] for entry in receipt_violations],
+                ), 1
+            acceptance_fields = {
+                "subject_manifest": ready_event["subject_manifest"],
+                "accepted_subject_digest": ready_event["subject_digest"],
+                "accepted_subject_ids": ready_event["subject_ids"],
+                "accepted_subject_fingerprints": ready_event.get("subject_fingerprints", {}),
+                "accepted_obligations": ready_event.get("subject_obligations", {}),
+                "evidence_refs": ready_receipts,
+            }
         collaboration["phase"] = "accepted"
         commit_state_event(
             root,
@@ -1362,6 +3023,7 @@ def review_decision(args: argparse.Namespace) -> tuple[dict, int]:
             objective_id=collaboration["objective_id"],
             round_id=collaboration["round_id"],
             actor="reviewer",
+            **acceptance_fields,
         )
     else:
         if not args.user_evidence:
@@ -1432,17 +3094,28 @@ def make_parser() -> argparse.ArgumentParser:
     decision.add_argument("--reason", required=True, choices=("normal-review", "executor-change", "interrupted", "long-pause", "explicit-request"))
     decision.add_argument("--project-source-sufficient", action="store_true")
     decision.add_argument("--json", action="store_true")
+    digest = sub.add_parser("subject-digest", allow_abbrev=False)
+    digest.add_argument("--change", required=True)
+    digest.add_argument("--objective", required=True)
+    digest.add_argument("--objective-plan", required=True)
+    digest.add_argument("--json", action="store_true")
     start = sub.add_parser("start", allow_abbrev=False)
     start.add_argument("--change", required=True)
     start.add_argument("--objective", required=True)
     start.add_argument("--round", required=True)
     start.add_argument("--events", required=True)
     start.add_argument("--matrix", required=True)
+    start.add_argument("--objective-plan")
     start.add_argument("--json", action="store_true")
     transition = sub.add_parser("transition", allow_abbrev=False)
     transition.add_argument("--change", required=True)
     transition.add_argument("--to", required=True, choices=("executing", "checkpoint", "blocked"))
     transition.add_argument("--blocker")
+    transition.add_argument("--blocker-category")
+    transition.add_argument("--blocker-code")
+    transition.add_argument("--affected-subject", action="append", default=[])
+    transition.add_argument("--evidence-ref", action="append", default=[])
+    transition.add_argument("--required-decision")
     transition.add_argument("--json", action="store_true")
     finding = sub.add_parser("record-finding", allow_abbrev=False)
     finding.add_argument("--change", required=True)
@@ -1460,8 +3133,24 @@ def make_parser() -> argparse.ArgumentParser:
     receipt.add_argument("--sequence", required=True, type=int)
     receipt.add_argument("--evidence-type", required=True, choices=("positive", "negative", "composition", "distribution", "sensitivity", "spec"))
     receipt.add_argument("--artifact", action="append", default=[])
+    receipt.add_argument("--verification-tier", choices=tuple(VERIFICATION_TIER_GATES))
+    receipt.add_argument("--gate", choices=tuple(VERIFICATION_TIER_GATES.values()))
+    receipt.add_argument("--host", choices=("claude-code", "codex", "workbuddy"))
     receipt.add_argument("argv", nargs=argparse.REMAINDER)
     receipt.add_argument("--json", action="store_true")
+    check = sub.add_parser("receipt-check", allow_abbrev=False)
+    check.add_argument("--change", required=True)
+    check.add_argument("--receipt", required=True)
+    check.add_argument("--gate", required=True, choices=tuple(VERIFICATION_TIER_GATES.values()))
+    check.add_argument("--json", action="store_true")
+    coverage = sub.add_parser("coverage-check", allow_abbrev=False)
+    coverage.add_argument("--change", required=True)
+    coverage.add_argument("--gate", required=True, choices=("start-subsequent", "review-ready", "whole-change", "release"))
+    coverage.add_argument("--receipt", action="append", default=[])
+    coverage.add_argument("--json", action="store_true")
+    implemented = sub.add_parser("mark-implemented", allow_abbrev=False)
+    implemented.add_argument("--change", required=True)
+    implemented.add_argument("--json", action="store_true")
     ready = sub.add_parser("review-ready", allow_abbrev=False)
     ready.add_argument("--change", required=True)
     ready.add_argument("--report")
@@ -1482,10 +3171,14 @@ def main() -> int:
         "validate-report": validate_report,
         "parity": parity,
         "handover-decision": handover_decision,
+        "subject-digest": subject_digest,
         "start": start_objective,
         "transition": transition_objective,
         "record-finding": record_finding,
         "run-receipt": run_receipt,
+        "receipt-check": receipt_check,
+        "coverage-check": coverage_check,
+        "mark-implemented": mark_implemented,
         "review-ready": review_ready,
         "review-decision": review_decision,
     }

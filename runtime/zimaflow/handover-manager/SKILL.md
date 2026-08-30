@@ -126,7 +126,7 @@ sync_reason: 有意不同步：套件内部子 Skill，由 Zimaflow 主入口路
 
 ## 生成时机
 
-> **Reviewer–Executor Loop 边界**：活跃 loop 的 `checkpoint`、`review_ready`、`changes_requested` 与下一 round 都不自动创建或更新 Handover；恢复所需短期事实由 state 的 collaboration 指针与 `event_head`、append-only events 的 `previous_event_id/state_after`、boundary matrix、receipts 与最新 Report 持有。单个 event/state 半写入由 CLI 恢复或拒绝，不用 Handover 修补。只有任务中断、长期暂停、用户明确要求，或执行者更换且这些项目真源仍不足以恢复时才进入下列生成时机；触发后仍使用本 Skill 的完整模板和详细程度，不复制 validation artifacts 正文。
+> **Reviewer–Executor Loop 边界**：活跃 loop 的 `checkpoint`、`review_ready`、`changes_requested` 与下一 round 都不自动创建或更新 Handover；恢复所需短期事实由 state 的 collaboration 指针与 `event_head`、append-only events 的 `previous_event_id/state_after`、boundary matrix、receipts 与最新 Report 持有。复发 boundary 的闭合结论只承接 guard 从全部相关 matrix 行与有效 evidence 派生的结果；任一相关行仍为 `open` 时保留阻断，不用 Handover 或 `systemic_closure` 自报布尔值覆盖。单个 event/state 半写入由 CLI 恢复或拒绝，不用 Handover 修补。只有任务中断、长期暂停、用户明确要求，或执行者更换且这些项目真源仍不足以恢复时才进入下列生成时机；触发后仍使用本 Skill 的完整模板和详细程度，不复制 validation artifacts 正文。
 
 ### 时机 1：session 正常收尾
 

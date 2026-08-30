@@ -195,13 +195,13 @@ catalog 是单一真源，用来统一规则 ID、触发条件和报告措辞；
 
 1. 读取 `<zimaflow-root>/references/Reviewer-Executor-Loop.md`。
 2. 若 state 未启用 `reviewer_executor` profile，保留原有只读审查与 Brief 输出行为，不要求 matrix/receipts，不写 loop state。
-3. 若 profile 已启用，先确认 executor 已通过 `review-ready` gate；checkpoint 或普通测试失败不能触发 reviewer decision。gate 必须已经从当前 delta-spec 全集、精确 `diff_base..HEAD`、Report 的逐项 `repo://` 链接、commit/source-tree receipts、evidence-only dirty set 和一致 event/state history 派生事实；不得把关键词、目录链接或单份过期回执当成完成。以当前 objective、round、boundary matrix、structured receipts、Execution Report 和项目真源做语义审核。
+3. 若 profile 已启用，先确认 executor 已通过 `review-ready` gate；checkpoint 或普通测试失败不能触发 reviewer decision。no-manifest path 保持现有 delta-spec、精确 diff、Report、commit/source-tree receipts、evidence-only dirty set 与 event/state history 门。manifest path 必须只检查 current objective 的 `required_task_ids`、canonical subject mapping、accepted-current predecessors 与有效 `objective_scope` receipts；后续 objective 的未完成 tasks 不阻塞当前 scope，`checkpoint_targeted` receipt 不能满足审核。task 文本/归属等 semantic input 变化必须使旧 receipt 失效，metadata-only 与跨 round 同 digest receipt 可复用。复发 boundary 必须由 guard 汇总相关 matrix/current evidence，`systemic_closure` 自报布尔值不构成证据。以当前 objective、round、manifest、boundary matrix、structured receipts、Execution Report 和项目真源做语义审核。
 4. 对每个有效 finding 运行 `record-finding`，使用稳定 `defect-class`、`boundary`、`requirement` ID；不得填写 recurrence count。feedback 只描述 objective / requirement / boundary / invariant / evidence gap，不给逐函数、逐文件或顺序补丁指令。
 5. 审核未通过时，把结构化 feedback 落在当前仓 validation 目录并运行 `review-decision --decision changes-requested --feedback <path>`；CLI 自动开启下一 round。以本次 Spec Compliance Report 和项目真源为证据，输出下一轮 objective-level Execution Brief。
 6. `本轮目标` 描述尚未满足的系统目标、边界或证据；同类缺陷连续出现两次、组合场景失败或本轮推翻安全/架构假设时，升级为完整边界审计、根因治理或结构性重构，并在硬约束中禁止继续点补丁。
 7. 运行 `zimaflow reviewer-executor validate-brief`，显式传入已核实的 `--code-root` / `--docs-root` 和 `--change`，并用可重复的 `--source-file` 传入本轮实际引用的 Spec Compliance Report 和全部项目真源文件；面向多个宿主时运行 `parity`。不得用占位文件绕过正文复制检查。
 
-全部满足时，profile 路径运行 `review-decision --decision accepted`；这只接受当前 objective，不代替 OpenSpec archive、docs sync、finalize 或 close。
+全部满足时，profile 路径运行 `review-decision --decision accepted`；manifest path 的 accepted event 必须冻结当时 digest、subject IDs、manifest pointer 与 evidence refs。这只接受当前 objective 的历史 proof，不保证永久 current-valid，也不代替后续 objectives、whole-Change/release verification、OpenSpec archive、docs sync、finalize 或 close。
 
 正常审核往返只使用 state/event/matrix/receipt + Execution Brief / Execution Report，不自动创建 Handover。只有任务中断、长期暂停、用户明确要求，或执行者更换且项目真源不足以恢复时，才交给 `handover-manager`。
 

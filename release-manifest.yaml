@@ -1,12 +1,12 @@
 schema_version: 2
 zimaflow_version: 1.22.7
-source_commit: cc7acd52d7c4f970bdf5558dd0bb2d584af0ea3b
+source_commit: 2e91b534c3258cab0706801f5a441dc02249d5a3
 host_capability_fingerprint: 4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbdde77
-build_id: zimaflow-1.22.7-cc7acd52d7c4f970bdf5558dd0bb2d584af0ea3b
+build_id: zimaflow-1.22.7-2e91b534c3258cab0706801f5a441dc02249d5a3
 reproducible_build: true
 promotion: immutable_tested_bundle
 license: MIT
-payload_sha256: 4d7c2a0f223c09f787b97b53a8167664e1edcc6f6a441f40303a346a29ed4670
+payload_sha256: 061baa462dddcdd02ce1bfa85f5f7fd4865c32ec25f943ad688c81385290ac46
 ownership:
   source: private_zimaflow_repository
   release_bundle: generated_from_shared_source

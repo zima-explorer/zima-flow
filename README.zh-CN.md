@@ -21,9 +21,25 @@ AI Coding 让实现变快，但需求边界、关键决策、验证结果和上�
 
 Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工作区的镜像。它与 Claude Code、Codex 和 WorkBuddy 配合，为已有的编码能力补上一条可靠的工程流程。
 
+## 1.22.7 有什么更新
+
+Zimaflow 1.22.7 让可选的 Reviewer–Executor 协作在中大型 Change 中更高效：
+
+- objective 审核批次可以把强相关 tasks 或一个纵向闭环合并为一次正式审核；内部 checkpoint 只运行专项检查，不再为每个 task 生成完整 Report 和 receipt。
+- canonical 验证对象把代码、规范、测试、契约、迁移及行为配置与证据元数据分开；只更新 tasks、state 或 Report 不会让已经有效的验证证据失效。
+- accepted 历史保持不可变；后续 objective 改动前序 objective 的语义输入时，系统会重新计算当前接受状态。
+
+该协作模式仍然是显式启用项。默认单 Agent 路径继续保持轻量，旧 no-manifest Reviewer–Executor Change 也保持兼容。
+
 ## 工作流如何运转
 
 路由需求 → 确认轻量契约 → 拆解 first slice → 有纪律地实现 → 验证结果 → 交接、收口并沉淀可复用经验。
+
+Zimaflow 会先按改动规模选择合适的流程档位：
+
+- **Quick：**低风险、聚焦的小改动；确认目标、范围和完成证据即可，不额外制造流程产物。
+- **Standard：**范围可控的功能或扩展；先对齐短 brief，拆解工作，并验证关键路径。
+- **Full：**跨模块或高风险改动；通过已确认的契约和 OpenSpec，让决策、交付和审核均可追溯。
 
 复杂改动时，Zimaflow 协调 OpenSpec 承接规范与实现工作流；小改动时，则在不引入重流程的前提下守住范围和证据。
 
@@ -93,14 +109,21 @@ claude plugin marketplace remove zimaflow
 
 codex plugin marketplace upgrade zimaflow
 codex plugin remove zimaflow@zimaflow
+codex plugin add zimaflow@zimaflow
+
+# 或者彻底移除安装和 marketplace。
+codex plugin remove zimaflow@zimaflow
 codex plugin marketplace remove zimaflow
 ```
 
 ## 验证发行内容
 
-在仓库根目录执行：
+release manifest 用于验证不可变发行 payload。请 checkout 要验证的 tag，避免使用包含后续本地改动的 working copy。本版本执行：
 
 ```sh
+git clone https://github.com/zima-explorer/zima-flow.git
+cd zima-flow
+git checkout v1.22.7
 ./verify-release.sh --distribution .
 ```
 

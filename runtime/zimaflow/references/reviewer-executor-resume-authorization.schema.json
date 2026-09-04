@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "repo://references/reviewer-executor-resume-authorization.schema.json",
+  "title": "Reviewer-Executor Blocked Resume Authorization Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "change_id", "objective_id", "round_id", "blocked_event_id", "required_decision_sha256", "approval_evidence", "approval_evidence_sha256", "created_at"],
+  "oneOf": [
+    {"required": ["blocker_category", "blocker_code"], "not": {"required": ["blocker_text_sha256"]}},
+    {"required": ["blocker_text_sha256"], "not": {"anyOf": [{"required": ["blocker_category"]}, {"required": ["blocker_code"]}]}}
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "blocked_objective_resume_authorization"},
+    "change_id": {"type": "string", "minLength": 1},
+    "objective_id": {"type": "string", "minLength": 1},
+    "round_id": {"type": "string", "pattern": "^round-[0-9]+$"},
+    "blocked_event_id": {"type": "string", "minLength": 1},
+    "blocker_category": {"type": "string", "minLength": 1},
+    "blocker_code": {"type": "string", "minLength": 1},
+    "blocker_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "required_decision_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "approval_evidence": {"type": "string", "pattern": "^repo://"},
+    "approval_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

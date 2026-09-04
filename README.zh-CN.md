@@ -21,15 +21,16 @@ AI Coding 让实现变快，但需求边界、关键决策、验证结果和上�
 
 Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工作区的镜像。它与 Claude Code、Codex 和 WorkBuddy 配合，为已有的编码能力补上一条可靠的工程流程。
 
-## 1.22.7 有什么更新
+## 1.22.8 有什么更新
 
-Zimaflow 1.22.7 让可选的 Reviewer–Executor 协作在中大型 Change 中更高效：
+Zimaflow 1.22.8 让可选的 Reviewer–Executor 协作能描述更大的规范集合，并把一条生命周期规则在各命令间统一：
 
-- objective 审核批次可以把强相关 tasks 或一个纵向闭环合并为一次正式审核；内部 checkpoint 只运行专项检查，不再为每个 task 生成完整 Report 和 receipt。
-- canonical 验证对象把代码、规范、测试、契约、迁移及行为配置与证据元数据分开；只更新 tasks、state 或 Report 不会让已经有效的验证证据失效。
-- accepted 历史保持不可变；后续 objective 改动前序 objective 的语义输入时，系统会重新计算当前接受状态。
+- 规范改为递归发现，`specs/recall/index/spec.md` 这样的命名空间布局会保留完整能力身份；不同命名空间下同名文件不再互相覆盖。
+- Requirement 与 Scenario 身份支持 Unicode：中文或中英混排标题会得到稳定、可读的身份，而不是被归一化为空；纯 ASCII 身份逐字节保持不变。
+- 被阻断的 objective 可以在同一 objective / round 上恢复，但必须凭独立记录的批准证据，并与执行者自身的授权信封分开；没有自动恢复，也不改写历史。
+- `state`、`recall`、`close` 与 `release-check` 现在共用同一个“活动 change”定义：changes 树中仍未关闭的工作，加上本轮触碰且尚未 finalize 的 archived state。更早的历史 archived 记录仍可由 `state` 查看、由 `finalize` 处理，但不会在之后每个 session 被重新提起。
 
-该协作模式仍然是显式启用项。默认单 Agent 路径继续保持轻量，旧 no-manifest Reviewer–Executor Change 也保持兼容。
+该协作模式仍然是显式启用项。默认单 Agent 路径继续保持轻量，既有 flat 规范证据也保持原有身份。
 
 ## 工作流如何运转
 
@@ -51,7 +52,7 @@ Zimaflow 会先按改动规模选择合适的流程档位：
 
 ## 快速开始
 
-先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.7。
+先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.8。
 
 Claude Code：
 
@@ -123,7 +124,7 @@ release manifest 用于验证不可变发行 payload。请 checkout 要验证的
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.7
+git checkout v1.22.8
 ./verify-release.sh --distribution .
 ```
 

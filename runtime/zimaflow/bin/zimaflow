@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.7"
+VERSION="1.22.8"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -26,7 +26,7 @@ Usage:
   zimaflow drift-check <change> [--json] [--write]
   zimaflow execution-input <change> --write [--json]
   zimaflow reviewer-executor validate-brief|validate-report|parity|handover-decision [options]
-  zimaflow reviewer-executor subject-digest|start|transition|record-finding|run-receipt [options]
+  zimaflow reviewer-executor subject-digest|start|transition|resume|record-finding|run-receipt [options]
   zimaflow reviewer-executor receipt-check|coverage-check|mark-implemented|review-ready|review-decision [options]
   zimaflow host-profile <host> [--json]
   zimaflow doctor <host> [--json] [options]
@@ -1563,8 +1563,50 @@ $(state_files "$root")
 EOF
 }
 
+# A state is active for the current session when it is not closed and either
+# remains in the live changes tree or its archived state file was touched by
+# the current working tree / HEAD first-parent change set. Historical archived
+# debt stays auditable through `state`, but does not become resumable work in
+# every later session. This is the shared owner for state/recall/close/release.
+state_record_is_session_active() {
+  local state_root="$1"
+  local changed_files="$2"
+  local phase="$3"
+  local file="$4"
+
+  [ "$phase" != "closed" ] || return 1
+
+  local archive_root="$state_root/openspec/changes/archive/"
+  case "$file" in
+    "$archive_root"*)
+      local state_prefix relative
+      state_prefix="$(git -C "$state_root" rev-parse --show-prefix 2>/dev/null)" || return 1
+      relative="${state_prefix}openspec/changes/archive/${file#"$archive_root"}"
+      printf '%s\n' "$changed_files" | grep -Fqx "$relative"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+state_session_active_records() {
+  local state_root="$1"
+  local records="$2"
+  local changed_files="$3"
+  local change phase mode archive_status file
+
+  while IFS=$'\t' read -r change phase mode archive_status file; do
+    [ -n "$file" ] || continue
+    state_record_is_session_active "$state_root" "$changed_files" "$phase" "$file" || continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "$change" "$phase" "$mode" "$archive_status" "$file"
+  done <<EOF
+$records
+EOF
+}
+
 state_active_count() {
-  awk -F '\t' 'NF && $2 != "closed" { count++ } END { print count + 0 }'
+  awk -F '\t' 'NF { count++ } END { print count + 0 }'
 }
 
 print_state_json() {
@@ -2516,27 +2558,7 @@ run_close() {
 
   local all_state_records state_records_value
   all_state_records="$(state_records "$state_root")"
-  state_records_value=""
-  if [ -n "$all_state_records" ]; then
-    local record_change record_phase record_mode record_archive_status record_file record_relative
-    while IFS=$'\t' read -r record_change record_phase record_mode record_archive_status record_file; do
-      [ -n "$record_file" ] || continue
-      case "$record_file" in
-        "$state_root/openspec/changes/archive/"*)
-          record_relative="${record_file#"$root"/}"
-          printf '%s\n' "$changed_files" | grep -Fqx "$record_relative" || continue
-          ;;
-      esac
-      if [ -n "$state_records_value" ]; then
-        state_records_value="$state_records_value
-$record_change	$record_phase	$record_mode	$record_archive_status	$record_file"
-      else
-        state_records_value="$record_change	$record_phase	$record_mode	$record_archive_status	$record_file"
-      fi
-    done <<EOF
-$all_state_records
-EOF
-  fi
+  state_records_value="$(state_session_active_records "$state_root" "$all_state_records" "$changed_files")"
 
   local active_state_count
   active_state_count="$(printf '%s\n' "$state_records_value" | state_active_count)"
@@ -2761,11 +2783,13 @@ run_state() {
     return 2
   fi
 
-  local records
+  local records changed_files active_records
   records="$(state_records "$root")"
+  changed_files="$(git_changed_files "$root")"
+  active_records="$(state_session_active_records "$root" "$records" "$changed_files")"
 
   local active_count
-  active_count="$(printf '%s\n' "$records" | state_active_count)"
+  active_count="$(printf '%s\n' "$active_records" | state_active_count)"
 
   if [ "$format" = "json" ]; then
     print_state_json "$root" "$records" "$active_count"
@@ -3642,8 +3666,10 @@ recall_render_single() {
   local project_name="${5:-}" code_repo="${6:-}" registry_path="${7:-}"
   local docs_root="${8:-}" project_config="${9:-}"
 
-  local files
-  files="$(state_files "$root")"
+  local records changed_files active_records
+  records="$(state_records "$root")"
+  changed_files="$(git_changed_files "$root")"
+  active_records="$(state_session_active_records "$root" "$records" "$changed_files")"
 
   local active_count=0
   local changes_json=""
@@ -3653,12 +3679,11 @@ recall_render_single() {
   local has_run_tests="no" has_refresh="no" has_manual="no" has_execution_input_refresh="no"
   local first="yes"
 
-  while IFS= read -r file; do
+  while IFS=$'\t' read -r _record_change _record_phase _record_mode _record_archive_status file; do
     [ -n "$file" ] || continue
     local fallback_change
     fallback_change="$(state_change_from_path "$root" "$file")"
     state_load_or_defaults "$file" "$fallback_change"
-    [ "$STATE_PHASE" = "closed" ] && continue
     local artifact_ref
     for artifact_ref in "$STATE_CONTRACT_PATH" "$STATE_DECISION_PATH" "$STATE_PROPOSAL_PATH" "$STATE_DESIGN_PATH" "$STATE_TASKS_PATH" "$STATE_HANDOVER_PATH" "$STATE_EXECUTION_INPUT_PATH"; do
       [ -z "$artifact_ref" ] || resolve_artifact_path "$root" "$artifact_ref" "$docs_root" >/dev/null || return 2
@@ -3733,7 +3758,7 @@ EOF
     changes_json="${changes_json}$(recall_change_json "$status" "$days" "$reason" "$handover_status" "$summary")"
     first="no"
   done <<EOF
-$files
+$active_records
 EOF
 
   local next_action
@@ -4060,8 +4085,10 @@ EOF
 
     # scanned project
     scanned_count=$((scanned_count + 1))
-    local files
-    files="$(state_files "$repo")"
+    local records changed_files active_records
+    records="$(state_records "$repo")"
+    changed_files="$(git_changed_files "$repo")"
+    active_records="$(state_session_active_records "$repo" "$records" "$changed_files")"
 
     local p_active=0 p_stale=0
     local p_threshold="$threshold" p_summary_lines="$summary_lines"
@@ -4078,12 +4105,11 @@ EOF
     local p_changes_json="" first_c="yes"
     local p_change_lines=""
 
-    while IFS= read -r file; do
+    while IFS=$'\t' read -r _record_change _record_phase _record_mode _record_archive_status file; do
       [ -n "$file" ] || continue
       local fallback_change
       fallback_change="$(state_change_from_path "$repo" "$file")"
       state_load_or_defaults "$file" "$fallback_change"
-      [ "$STATE_PHASE" = "closed" ] && continue
       local artifact_ref
       for artifact_ref in "$STATE_CONTRACT_PATH" "$STATE_DECISION_PATH" "$STATE_PROPOSAL_PATH" "$STATE_DESIGN_PATH" "$STATE_TASKS_PATH" "$STATE_HANDOVER_PATH" "$STATE_EXECUTION_INPUT_PATH"; do
         [ -z "$artifact_ref" ] || resolve_artifact_path "$repo" "$artifact_ref" "$p_docs_root" >/dev/null || return 2
@@ -4146,7 +4172,7 @@ EOF2
       )"
       first_c="no"
     done <<EOF
-$files
+$active_records
 EOF
 
     active_total=$((active_total + p_active))
@@ -4327,19 +4353,19 @@ run_release_check() {
   [ -n "$secrets_hits" ] && secrets_readiness="suspected"
 
   # Walk active changes for verification + handover readiness.
-  local files
-  files="$(state_files "$state_root")"
+  local records active_records
+  records="$(state_records "$state_root")"
+  active_records="$(state_session_active_records "$state_root" "$records" "$changed_files")"
   local active_count=0
   local verify_incomplete="no" handover_missing="no" archive_pending="no"
   local unarchived_ids=""
   local active_changes_json="" first="yes"
 
-  while IFS= read -r file; do
+  while IFS=$'\t' read -r _record_change _record_phase _record_mode _record_archive_status file; do
     [ -n "$file" ] || continue
     local fallback_change
     fallback_change="$(state_change_from_path "$state_root" "$file")"
     state_load_or_defaults "$file" "$fallback_change"
-    [ "$STATE_PHASE" = "closed" ] && continue
     active_count=$((active_count + 1))
 
     local reviewer_release_ready="not_applicable" release_coverage_reasons=""
@@ -4380,7 +4406,7 @@ run_release_check() {
     )"
     first="no"
   done <<EOF
-$files
+$active_records
 EOF
 
   # Readiness summaries.

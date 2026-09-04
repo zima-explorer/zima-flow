@@ -154,7 +154,7 @@ state 不保存 `subject_digest`、required-objective 列表、accepted-current�
 
 ## 五、phase 枚举
 
-本节顶层 `phase` 是 OpenSpec change 生命周期。`collaboration.phase` 是 opt-in Reviewer–Executor objective 生命周期（`planned → executing ↔ checkpoint → review_ready → changes_requested/accepted`，或 `blocked` / 显式 `terminated`），两者必须分开读取和推进；reviewer 接受 objective 不等于 archive，也不自动把顶层 phase 推进为 `verified` 或 `closed`。
+本节顶层 `phase` 是 OpenSpec change 生命周期。`collaboration.phase` 是 opt-in Reviewer–Executor objective 生命周期（`planned → executing ↔ checkpoint → review_ready → changes_requested/accepted`，或 `blocked` / 显式 `terminated`），两者必须分开读取和推进；reviewer 接受 objective 不等于 archive，也不自动把顶层 phase 推进为 `verified` 或 `closed`。generic transition 不允许 `blocked → executing`；只有带独立 approval evidence 和 executor authorization envelope 的 `reviewer-executor resume` 可在 append-only history 中追加 `objective_resumed`，保持同一 objective/round，并把 state summary 投影回 `executing`。
 
 | phase | 进入条件 | 下一步 |
 |-------|----------|--------|
@@ -185,7 +185,7 @@ state 不保存 `subject_digest`、required-objective 列表、accepted-current�
 
 `need_docs_sync` 是兼容的粗粒度 `next_action`；自动化和 Agent 必须读取 `blocking_reasons[]`。生命周期仍停在 archived 时使用 `archive_state_not_closed`，不得把它退化成模糊的 docs 提示。
 
-close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更集”为 session 边界：本轮刚 archive/finalize 的 state 必须参与 gate，未被本轮触碰的历史 archived state 仍由 `zimaflow state` 可见，但不阻断以后每个无关 session。旧 state 顶层若使用 `change`，读取端兼容回退；新写入仍统一使用 `change_id`。
+state / recall / close / release-check 的 active 分类以“当前 working tree + HEAD first-parent 变更集”为统一 session 边界：live changes tree 中非 `closed` 的 state 始终 active；archive tree 中本轮刚 archive 且尚未 finalize 的 state 仍 active，必须进入 `archive_state_not_closed` / finalize 路径；未被本轮触碰的历史 archived state 只由 `zimaflow state` 列出供审计，不计入 active，也不阻断以后每个无关 session。`zimaflow finalize <change>` 继续按显式 change id 定位 archive state，因此 legacy state 仍可修复；该命令成功写入 `closed` 后，所有读取端立即判为非 active。旧 state 顶层若使用 `change`，读取端兼容回退；新写入仍统一使用 `change_id`。
 
 ## 六、写入责任
 
@@ -197,7 +197,7 @@ close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更�
 | OpenSpec propose 后 | `openspec-superpowers-bridge` 启动前检查 | 写入 openspec 三件套路径，phase → `spec_proposed` |
 | bridge Step 0 用户确认后 | `openspec-superpowers-bridge` | 写入 `spec_review_confirmed`、实现隔离信息，phase → `spec_reviewed` / `build_started` |
 | 跨 Agent objective 显式启动后 | `zimaflow reviewer-executor start` | 仅在当前 change 写入 `collaboration.profile=reviewer_executor`、current objective/round、phase 与 `repo://` validation 指针；manifest path 增加 plan/manifest 指针但不保存 digest；重复启动幂等 |
-| objective 执行 / 审核中 | `zimaflow reviewer-executor transition\|record-finding\|review-ready\|review-decision` | 只通过合法 transition 更新 `collaboration.phase`；finding 与 gate decision 追加到 `loop_events`，不手写复发次数 |
+| objective 执行 / 审核中 | `zimaflow reviewer-executor transition\|resume\|record-finding\|review-ready\|review-decision` | 只通过合法 transition 或独立授权 resume 更新 `collaboration.phase`；resume 固定 handler actor 为 executor，approval authority/双 artifact path+hash 只进入 append-only event，state 不缓存授权正文/current-valid 布尔值；finding 与 gate decision 追加到 `loop_events`，不手写复发次数 |
 | tasks 完成后 | `openspec-superpowers-bridge` | phase → `build_completed` |
 | verify / full tests 后 | `openspec-superpowers-bridge` 或 Agent | 写入 verification，phase → `verified` |
 | 建立交接基线时 | `zimaflow drift-check --write` | 写入 `artifact_hashes`，不推进 phase |
@@ -237,8 +237,8 @@ close 的 archived blocker 以“当前 working tree + HEAD first-parent 变更�
 | `session-close-reconciler` | 对账 phase、verify、archive、docs sync、handover 是否一致 |
 | `session-close-reconciler`（opt-in） | 额外对账 objective/round、`collaboration.phase`、boundary matrix、latest report/receipts；未 accepted 时上浮 `review_loop_not_accepted` |
 | `handover-manager` | 在 handover 中引用 state 文件路径和当前 phase |
-| `zimaflow state` | 汇总当前目录（优先）或 git root 下的 `openspec/changes/*/.zimaflow-state.yaml`，输出 human / JSON |
-| `zimaflow recall` | 汇总未关闭 change 的进度、artifact 路径、verification / handover 状态，并按 `verified_at` → `handover.updated_at` → 文件 mtime 做 30 天 bit-rot 提醒；只读、不写、不推进 phase。`--days N` / `--summary-lines N` 可调阈值与摘要行数 |
+| `zimaflow state` | 汇总当前目录（优先）或 git root 下的全部 `openspec/changes/*/.zimaflow-state.yaml`，输出 human / JSON；全部 state 仍可见，`active_count` 使用统一 session-active 分类 |
+| `zimaflow recall` | 汇总 session-active change 的进度、artifact 路径、verification / handover 状态，并按 `verified_at` → `handover.updated_at` → 文件 mtime 做 30 天 bit-rot 提醒；只读、不写、不推进 phase。`--days N` / `--summary-lines N` 可调阈值与摘要行数 |
 | `zimaflow recall --project <name>` | 从用户级 `~/.zimaflow/projects.yaml` 定位项目，以解析后的 `code_root` / `docs_root` 读取 state 与 handover；无需 cd |
 | `zimaflow recall --all` | 跨项目：遍历用户级项目配置中的 active 项目，各自读取 `repo://openspec/changes/*/.zimaflow-state.yaml`，汇总 active / stale / skipped；默认不读 handover 摘要，`--summary-lines N` 显式开启 |
 | `zimaflow release-check` | 读取 active change state 的 `verification`（opsx_verify / full_tests）、`archive.status`、`handover.latest_path`，汇总发布前置就绪度（verify / archive / handover / secrets）+ 四问；只读、不 deploy、不读发布 token |

@@ -1,6 +1,6 @@
 {
   "name": "zimaflow",
-  "version": "1.22.7",
+  "version": "1.22.8",
   "description": "Generated experimental Claude Code packaging adapter for zimaflow.",
   "author": {
     "name": "Zimaflow"

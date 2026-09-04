@@ -27,6 +27,7 @@ STOP_RE = re.compile(r"停在\s*`?(review|archive|push|release|评审|归档|推
 ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*$", re.M)
 CHANGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 ROUND_ID_RE = re.compile(r"^round-([0-9]+)$")
+CAPABILITY_SEGMENT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 PROFILE = "reviewer_executor"
 ACTIVE_PHASES = {"planned", "executing", "checkpoint", "review_ready", "changes_requested", "blocked"}
 BLOCKER_ALLOWED_RE = re.compile(
@@ -201,33 +202,184 @@ def non_evidence_dirty_paths(root: Path, change: str) -> list[str]:
 
 
 def stable_spec_id(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    normalized = unicodedata.normalize("NFC", unicodedata.normalize("NFC", value).lower())
+    identity: list[str] = []
+    separator_pending = False
+    for character in normalized:
+        if unicodedata.category(character)[:1] in {"L", "N"}:
+            if separator_pending and identity:
+                identity.append("-")
+            identity.append(character)
+            separator_pending = False
+        elif identity:
+            separator_pending = True
+    return "".join(identity)
 
 
-def required_spec_pairs(root: Path, change: str) -> dict[tuple[str, str], str]:
+def canonical_delta_spec_candidates(root: Path, change: str) -> list[tuple[str, Path]]:
     specs_root = change_root(root, change) / "specs"
     if not specs_root.is_dir():
         raise ValueError("delta_specs_missing")
-    pairs: dict[tuple[str, str], str] = {}
-    for path in sorted(specs_root.glob("*/spec.md")):
+    if specs_root.is_symlink():
+        raise ValueError("delta_spec_symlink_forbidden")
+    resolved_root = specs_root.resolve()
+    candidates: list[tuple[str, Path]] = []
+    discovered: list[Path] = []
+    for current, dirnames, filenames in os.walk(specs_root, followlinks=False):
+        current_path = Path(current)
+        if any((current_path / dirname).is_symlink() for dirname in dirnames):
+            raise ValueError("delta_spec_symlink_forbidden")
+        if "spec.md" in filenames:
+            discovered.append(current_path / "spec.md")
+    for path in discovered:
+        relative = path.relative_to(specs_root)
+        capability_parts = relative.parent.parts
+        if not capability_parts:
+            raise ValueError("delta_spec_path_invalid")
+        if path.is_symlink() or any(
+            specs_root.joinpath(*capability_parts[:index]).is_symlink()
+            for index in range(1, len(capability_parts) + 1)
+        ):
+            raise ValueError("delta_spec_symlink_forbidden")
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("delta_spec_path_invalid") from exc
+        if resolved_root not in resolved.parents:
+            raise ValueError("delta_spec_path_outside_root")
+        if not path.is_file():
+            raise ValueError("delta_spec_path_invalid")
+        if any(
+            unicodedata.normalize("NFC", segment) != segment
+            or not segment.isascii()
+            or not CAPABILITY_SEGMENT_RE.fullmatch(segment)
+            or len(segment.encode("utf-8")) > 64
+            for segment in capability_parts
+        ):
+            raise ValueError("delta_spec_capability_id_invalid")
+        capability_id = "/".join(capability_parts)
+        if len(capability_id.encode("utf-8")) > 255:
+            raise ValueError("delta_spec_capability_id_invalid")
+        candidates.append((capability_id, path))
+    return sorted(
+        candidates,
+        key=lambda entry: (
+            entry[0].encode("utf-8"),
+            entry[1].relative_to(root).as_posix().encode("utf-8"),
+        ),
+    )
+
+
+def required_spec_pairs(root: Path, change: str) -> dict[tuple[str, str, str], str]:
+    pairs: dict[tuple[str, str, str], str] = {}
+    for capability_id, path in canonical_delta_spec_candidates(root, change):
         requirement = ""
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             match = re.match(r"^### Requirement:\s*(.+?)\s*$", line)
             if match:
                 requirement = stable_spec_id(match.group(1))
+                if not requirement:
+                    raise ValueError(
+                        f"delta_spec_identity_invalid:{path.relative_to(root)}:{line_number}"
+                    )
                 continue
             match = re.match(r"^#### Scenario:\s*(.+?)\s*$", line)
             if not match:
                 continue
             if not requirement:
                 raise ValueError(f"delta_spec_invalid:{path.relative_to(root)}:{line_number}")
-            pair = (requirement, stable_spec_id(match.group(1)))
-            if not all(pair) or pair in pairs:
-                raise ValueError(f"delta_spec_id_collision:{pair[0]}:{pair[1]}")
+            scenario = stable_spec_id(match.group(1))
+            if not scenario:
+                raise ValueError(
+                    f"delta_spec_identity_invalid:{path.relative_to(root)}:{line_number}"
+                )
+            pair = (capability_id, requirement, scenario)
+            if pair in pairs:
+                raise ValueError(f"delta_spec_id_collision:{pair[0]}:{pair[1]}:{pair[2]}")
             pairs[pair] = f"repo://{path.relative_to(root)}#{line_number}"
     if not pairs:
         raise ValueError("delta_specs_empty")
     return pairs
+
+
+def has_namespaced_spec_pairs(pairs: object) -> bool:
+    return any(
+        isinstance(pair, tuple) and len(pair) == 3 and "/" in str(pair[0])
+        for pair in pairs
+    )
+
+
+def boundary_matrix_version(top: dict[str, str]) -> int:
+    raw = top.get("schema_version", "")
+    if raw not in {"1", "2"}:
+        raise ValueError("verification_subject_version_unsupported")
+    normalization = top.get("normalization_version", "")
+    if raw == "1" and normalization not in {"", "1"}:
+        raise ValueError("verification_subject_version_unsupported")
+    if raw == "2" and normalization != "2":
+        raise ValueError("verification_subject_version_unsupported")
+    return int(raw)
+
+
+def matrix_schema_current_violations(
+    root: Path, change: str, collaboration: dict[str, str]
+) -> list[dict[str, str]]:
+    try:
+        required_pairs = required_spec_pairs(root, change)
+        if not has_namespaced_spec_pairs(required_pairs):
+            return []
+        top, _ = parse_boundary_matrix(
+            logical_repo_path(root, collaboration.get("boundary_matrix", ""), must_exist=True)
+        )
+        version = boundary_matrix_version(top)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return [item(str(exc), "boundary matrix schema current-validity 无法重算")]
+    if version == 1:
+        return [item(
+            "verification_subject_schema_upgrade_required",
+            "namespaced/mixed Change 必须使用 boundary matrix schema/normalization v2",
+        )]
+    return []
+
+
+def resolve_matrix_row_identity(
+    version: int,
+    row: dict[str, str],
+    required_pairs: object,
+) -> tuple[str, ...]:
+    requirement_id = row.get("requirement_id", "")
+    scenario_id = row.get("scenario_id", "")
+    capability_id = row.get("capability_id", "")
+    if requirement_id == "@composition":
+        identity = (requirement_id, scenario_id)
+        if capability_id:
+            raise ValueError("boundary_matrix_invalid")
+        if identity not in required_pairs:
+            raise ValueError("spec_mapping_unknown")
+        return identity
+    candidates = sorted(
+        pair
+        for pair in required_pairs
+        if isinstance(pair, tuple)
+        and len(pair) == 3
+        and pair[1:] == (requirement_id, scenario_id)
+    )
+    if version == 1:
+        if capability_id:
+            raise ValueError("boundary_matrix_invalid")
+        if any("/" in pair[0] for pair in candidates):
+            raise ValueError("verification_subject_schema_upgrade_required")
+        if len(candidates) != 1:
+            raise ValueError("spec_mapping_ambiguous" if len(candidates) > 1 else "spec_mapping_unknown")
+        return candidates[0]
+    if version != 2:
+        raise ValueError("verification_subject_version_unsupported")
+    if not capability_id:
+        raise ValueError("spec_mapping_incomplete")
+    identity = (capability_id, requirement_id, scenario_id)
+    if identity not in required_pairs:
+        raise ValueError("spec_mapping_unknown")
+    return identity
 
 
 def repo_links(text: str) -> set[str]:
@@ -370,11 +522,12 @@ def append_event(root: Path, collaboration: dict[str, str], event_type: str, **f
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise ValueError("event_log_not_regular_file")
     existing = read_events(root, collaboration)
+    event_timestamp = str(fields.pop("_event_timestamp", now_iso()))
     event = {
         "schema_version": 1,
         "event_id": f"{event_type}-{len(existing) + 1:04d}",
         "event_type": event_type,
-        "timestamp": now_iso(),
+        "timestamp": event_timestamp,
         **fields,
     }
     with path.open("a", encoding="utf-8") as handle:
@@ -420,6 +573,7 @@ EVENT_PHASES = {
     "round_started": "executing",
     "checkpointed": "checkpoint",
     "blocked": "blocked",
+    "objective_resumed": "executing",
     "review_ready_passed": "review_ready",
     "changes_requested": "executing",
     "accepted": "accepted",
@@ -527,6 +681,250 @@ def load_json_object(path: Path) -> dict:
     if not isinstance(value, dict):
         raise ValueError("verification_subject_manifest_invalid")
     return value
+
+
+def load_strict_json_object(path: Path, reason: str) -> dict:
+    def reject_duplicate(pairs: list[tuple[str, object]]) -> dict:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(reason)
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(reason) from exc
+    if not isinstance(value, dict):
+        raise ValueError(reason)
+    return value
+
+
+def normalized_rfc3339_utc(value: object) -> tuple[datetime, str]:
+    if not isinstance(value, str) or not value or re.search(r":60(?:[.,]|Z|[+-])", value):
+        raise ValueError("resume_authorization_invalid")
+    fraction = re.search(r"[.,]([0-9]+)(?=Z|[+-][0-9]{2}:[0-9]{2}$)", value)
+    if fraction and len(fraction.group(1)) > 6:
+        raise ValueError("resume_authorization_invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("resume_authorization_invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("resume_authorization_invalid")
+    normalized = parsed.astimezone(timezone.utc)
+    return normalized, normalized.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def blocked_authorization_identity(blocked_event: dict) -> tuple[dict[str, object], str]:
+    required_decision = str(blocked_event.get("required_decision") or blocked_event.get("blocker") or "")
+    if not required_decision:
+        raise ValueError("resume_authorization_invalid")
+    required_hash = hashlib.sha256(required_decision.encode("utf-8")).hexdigest()
+    if blocked_event.get("blocker_category") and blocked_event.get("blocker_code"):
+        return {
+            "blocker_category": blocked_event["blocker_category"],
+            "blocker_code": blocked_event["blocker_code"],
+            "required_decision_sha256": required_hash,
+        }, required_hash
+    blocker = str(blocked_event.get("blocker") or "")
+    if not blocker:
+        raise ValueError("resume_authorization_invalid")
+    return {
+        "blocker_text_sha256": hashlib.sha256(blocker.encode("utf-8")).hexdigest(),
+        "required_decision_sha256": required_hash,
+    }, required_hash
+
+
+def validate_resume_authorization(
+    root: Path,
+    change: str,
+    collaboration: dict[str, str],
+    blocked_event: dict,
+    authorization_reference: str,
+    resume_timestamp: str,
+) -> dict:
+    validation_root = validation_root_for(root, change)
+    try:
+        envelope_path = logical_repo_path(root, authorization_reference, must_exist=True)
+    except (ValueError, FileNotFoundError) as exc:
+        raise ValueError("resume_authorization_missing") from exc
+    if validation_root != envelope_path and validation_root not in envelope_path.parents:
+        raise ValueError("resume_authorization_invalid")
+    envelope = load_strict_json_object(envelope_path, "resume_authorization_invalid")
+    identity, _ = blocked_authorization_identity(blocked_event)
+    common_envelope = {
+        "schema_version", "kind", "change_id", "objective_id", "round_id", "blocked_event_id",
+        "approval_evidence", "approval_evidence_sha256", "created_at", *identity.keys(),
+    }
+    if set(envelope) != common_envelope:
+        raise ValueError("resume_authorization_invalid")
+    if envelope.get("schema_version") != 1 or envelope.get("kind") != "blocked_objective_resume_authorization":
+        raise ValueError("resume_authorization_invalid")
+    expected_common = {
+        "change_id": change,
+        "objective_id": collaboration.get("objective_id"),
+        "round_id": collaboration.get("round_id"),
+    }
+    if any(envelope.get(key) != value for key, value in expected_common.items()):
+        raise ValueError("resume_identity_mismatch")
+    if envelope.get("blocked_event_id") != blocked_event.get("event_id"):
+        raise ValueError("resume_blocked_event_stale")
+    if any(envelope.get(key) != value for key, value in identity.items()):
+        raise ValueError("resume_authorization_invalid")
+    approval_reference = envelope.get("approval_evidence")
+    if not isinstance(approval_reference, str):
+        raise ValueError("resume_authorization_invalid")
+    try:
+        approval_path = logical_repo_path(root, approval_reference, must_exist=True)
+    except (ValueError, FileNotFoundError) as exc:
+        raise ValueError("resume_authorization_missing") from exc
+    if validation_root != approval_path and validation_root not in approval_path.parents:
+        raise ValueError("resume_authorization_invalid")
+    approval_hash = sha256_file(approval_path)
+    if envelope.get("approval_evidence_sha256") != approval_hash:
+        raise ValueError("resume_authorization_invalid")
+    approval = load_strict_json_object(approval_path, "resume_authorization_invalid")
+    approval_keys = {
+        "schema_version", "decision", "approved", "change_id", "objective_id", "round_id",
+        "blocked_event_id", "approved_scope", "approval_authority", "approved_at", *identity.keys(),
+    }
+    if set(approval) != approval_keys:
+        raise ValueError("resume_authorization_invalid")
+    if approval.get("schema_version") != 1 or approval.get("decision") != "approve_blocked_objective_resume" or approval.get("approved") is not True:
+        raise ValueError("resume_authorization_invalid")
+    if any(approval.get(key) != value for key, value in expected_common.items()):
+        raise ValueError("resume_identity_mismatch")
+    if approval.get("blocked_event_id") != blocked_event.get("event_id"):
+        raise ValueError("resume_blocked_event_stale")
+    if any(approval.get(key) != value for key, value in identity.items()):
+        raise ValueError("resume_authorization_invalid")
+    scope = approval.get("approved_scope")
+    authority = approval.get("approval_authority")
+    if (
+        not isinstance(scope, list)
+        or not scope
+        or not all(isinstance(entry, str) and entry.strip() for entry in scope)
+        or not isinstance(authority, dict)
+        or set(authority) != {"kind", "authority_id"}
+        or authority.get("kind") not in {"user", "reviewer"}
+        or not isinstance(authority.get("authority_id"), str)
+        or not authority["authority_id"].strip()
+        or authority.get("authority_id") == "executor"
+    ):
+        raise ValueError("resume_authorization_invalid")
+    blocked_at, _ = normalized_rfc3339_utc(blocked_event.get("timestamp"))
+    approved_at, approved_at_text = normalized_rfc3339_utc(approval.get("approved_at"))
+    created_at, created_at_text = normalized_rfc3339_utc(envelope.get("created_at"))
+    resume_at, resume_at_text = normalized_rfc3339_utc(resume_timestamp)
+    if not blocked_at < approved_at <= created_at <= resume_at:
+        raise ValueError("resume_authorization_invalid")
+    return {
+        "authorization": authorization_reference,
+        "authorization_sha256": sha256_file(envelope_path),
+        "approval_evidence": approval_reference,
+        "approval_evidence_sha256": approval_hash,
+        "approval_authority": authority,
+        "approved_at": approved_at_text,
+        "authorization_created_at": created_at_text,
+        "resume_at": resume_at_text,
+        "blocked_event_id": str(blocked_event["event_id"]),
+        **identity,
+    }
+
+
+def authorization_obligations(events: list[dict], objective_id: str | None = None) -> list[dict]:
+    keys = (
+        "authorization", "authorization_sha256", "approval_evidence", "approval_evidence_sha256",
+        "approval_authority", "approved_at", "authorization_created_at", "resume_at",
+        "blocked_event_id", "blocker_category", "blocker_code", "blocker_text_sha256",
+        "required_decision_sha256",
+    )
+    return [
+        {key: event[key] for key in keys if key in event}
+        for event in events
+        if event.get("event_type") == "objective_resumed"
+        and (objective_id is None or event.get("objective_id") == objective_id)
+    ]
+
+
+def authorization_current_violations(
+    root: Path, events: list[dict], objective_id: str | None = None
+) -> list[dict[str, str]]:
+    violations: list[dict[str, str]] = []
+    event_by_id = {str(event.get("event_id")): event for event in events}
+    for resumed in (
+        event for event in events
+        if event.get("event_type") == "objective_resumed"
+        and (objective_id is None or event.get("objective_id") == objective_id)
+    ):
+        references = (
+            ("authorization", "authorization_sha256"),
+            ("approval_evidence", "approval_evidence_sha256"),
+        )
+        paths: list[Path] = []
+        missing = False
+        changed = False
+        for reference_key, hash_key in references:
+            reference = resumed.get(reference_key)
+            try:
+                path = logical_repo_path(root, str(reference), must_exist=True)
+            except (ValueError, FileNotFoundError):
+                missing = True
+                continue
+            paths.append(path)
+            if sha256_file(path) != resumed.get(hash_key):
+                changed = True
+        if missing:
+            violations.append(item("resume_authorization_evidence_missing", "resume authorization artifact 不可解析"))
+            continue
+        if changed:
+            violations.append(item("resume_authorization_evidence_changed", "resume authorization artifact bytes 已改变"))
+            continue
+        untracked = [
+            path.relative_to(root).as_posix()
+            for path in paths
+            if subprocess.run(
+                ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", path.relative_to(root).as_posix()],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode != 0
+        ]
+        if untracked:
+            violations.append(item(
+                "resume_authorization_evidence_untracked",
+                "resume authorization artifact 未进入 Git truth：" + ", ".join(untracked),
+            ))
+            continue
+        blocked = event_by_id.get(str(resumed.get("blocked_event_id")))
+        if not blocked or blocked.get("event_type") != "blocked":
+            violations.append(item("resume_authorization_identity_mismatch", "resume blocked event identity 不可重算"))
+            continue
+        collaboration = {
+            "objective_id": str(resumed.get("objective_id", "")),
+            "round_id": str(resumed.get("round_id", "")),
+            "event_head": str(blocked.get("event_id", "")),
+        }
+        try:
+            current = validate_resume_authorization(
+                root,
+                str(resumed.get("change_id", "")),
+                collaboration,
+                blocked,
+                str(resumed.get("authorization", "")),
+                str(resumed.get("resume_at", "")),
+            )
+        except ValueError:
+            violations.append(item("resume_authorization_identity_mismatch", "resume authorization identity/timing 已改变"))
+            continue
+        frozen = authorization_obligations([resumed])[0]
+        if any(current.get(key) != value for key, value in frozen.items()):
+            violations.append(item("resume_authorization_identity_mismatch", "resume authorization frozen identity 不匹配"))
+    return violations
 
 
 def normalize_semantic_text(value: str) -> str:
@@ -665,19 +1063,59 @@ SET_ARRAY_KEYS = {
 }
 
 
-def projection_obligation_pairs(projection: dict) -> set[tuple[str, str]]:
-    pairs: set[tuple[str, str]] = set()
+def projection_obligation_pairs(projection: dict) -> set[tuple[str, ...]]:
+    version = (projection.get("schema_version"), projection.get("normalization_version"))
+    if version not in {(1, 1), (2, 2)}:
+        raise ValueError("verification_subject_version_unsupported")
+    pairs: set[tuple[str, ...]] = set()
     for subject in projection.get("subjects", []):
         raw_pairs = subject.get("spec_pairs", [])
         if not isinstance(raw_pairs, list):
             raise ValueError("verification_subject_manifest_invalid")
         for pair in raw_pairs:
-            if not isinstance(pair, dict) or set(pair) != {"requirement_id", "scenario_id"}:
+            expected_keys = (
+                {"requirement_id", "scenario_id"}
+                if version == (1, 1)
+                else {"capability_id", "requirement_id", "scenario_id"}
+            )
+            if not isinstance(pair, dict) or set(pair) != expected_keys:
                 raise ValueError("verification_subject_manifest_invalid")
-            pairs.add((str(pair["requirement_id"]), str(pair["scenario_id"])))
+            if version == (1, 1):
+                pairs.add((str(pair["requirement_id"]), str(pair["scenario_id"])))
+            else:
+                pairs.add((
+                    str(pair["capability_id"]),
+                    str(pair["requirement_id"]),
+                    str(pair["scenario_id"]),
+                ))
         if subject.get("kind") == "composition_invariant":
             pairs.add(("@composition", str(subject["subject_id"])))
     return pairs
+
+
+def resolved_projection_obligation_pairs(
+    projection: dict, required_pairs: object
+) -> set[tuple[str, ...]]:
+    declared = projection_obligation_pairs(projection)
+    version = (projection.get("schema_version"), projection.get("normalization_version"))
+    if version == (2, 2):
+        return declared
+    resolved: set[tuple[str, ...]] = set()
+    for pair in declared:
+        if pair[0] == "@composition":
+            resolved.add(pair)
+            continue
+        candidates = sorted(
+            required
+            for required in required_pairs
+            if len(required) == 3 and required[1:] == pair
+        )
+        if any("/" in candidate[0] for candidate in candidates):
+            raise ValueError("verification_subject_schema_upgrade_required")
+        if len(candidates) != 1:
+            raise ValueError("spec_mapping_ambiguous" if len(candidates) > 1 else "spec_mapping_unknown")
+        resolved.add(candidates[0])
+    return resolved
 VERIFICATION_TIER_GATES = {
     "checkpoint_targeted": "checkpoint",
     "objective_scope": "review-ready",
@@ -832,6 +1270,11 @@ def build_subject_projection(
         "spec_pairs", "boundary_id", "owner", "invariant", "required_evidence",
         "verification_contract", "metadata",
     }
+    version = (manifest.get("schema_version"), manifest.get("normalization_version"))
+    if version not in {(1, 1), (2, 2)}:
+        raise ValueError("verification_subject_version_unsupported")
+    if version == (1, 1) and has_namespaced_spec_pairs(required_spec_pairs(root, change)):
+        raise ValueError("verification_subject_schema_upgrade_required")
     if set(manifest) - allowed_manifest_keys:
         raise ValueError("verification_subject_manifest_invalid")
     required_task_ids = objective.get("required_task_ids")
@@ -846,8 +1289,6 @@ def build_subject_projection(
         or sorted(manifest_task_ids) != sorted(required_task_ids)
     ):
         raise ValueError("verification_subject_mapping_mismatch")
-    if manifest.get("normalization_version") != 1:
-        raise ValueError("verification_subject_manifest_invalid")
     subjects = manifest.get("subjects")
     if not isinstance(subjects, list) or not subjects:
         raise ValueError("verification_subject_manifest_invalid")
@@ -862,6 +1303,12 @@ def build_subject_projection(
         inputs = raw_subject.get("semantic_inputs")
         evidence = raw_subject.get("required_evidence")
         contract = raw_subject.get("verification_contract")
+        raw_spec_pairs = raw_subject.get("spec_pairs", [])
+        pair_keys = (
+            {"requirement_id", "scenario_id"}
+            if version == (1, 1)
+            else {"capability_id", "requirement_id", "scenario_id"}
+        )
         if (
             not isinstance(subject_id, str)
             or not subject_id
@@ -878,6 +1325,8 @@ def build_subject_projection(
             or not all(isinstance(value, str) and value for value in evidence)
             or not isinstance(contract, dict)
             or not contract
+            or not isinstance(raw_spec_pairs, list)
+            or any(not isinstance(pair, dict) or set(pair) != pair_keys for pair in raw_spec_pairs)
         ):
             raise ValueError("verification_subject_manifest_invalid")
         subject_ids.add(subject_id)
@@ -908,8 +1357,8 @@ def build_subject_projection(
         semantic_subject["verification_contract"] = normalize_contract_value(contract)
         normalized_subjects.append(normalize_contract_value(semantic_subject))
     return {
-        "schema_version": 1,
-        "normalization_version": 1,
+        "schema_version": version[0],
+        "normalization_version": version[1],
         "change_id": normalize_semantic_text(change),
         "objective_id": normalize_semantic_text(objective_id),
         "objective_order": int(objective["order"]),
@@ -947,11 +1396,12 @@ def load_manifest_opt_in(
         raise ValueError("verification_subject_manifest_invalid")
     manifest = load_json_object(manifest_path)
     if (
-        manifest.get("schema_version") != 1
-        or manifest.get("change_id") != change
+        manifest.get("change_id") != change
         or manifest.get("objective_id") != objective_id
     ):
         raise ValueError("verification_subject_mapping_mismatch")
+    if (manifest.get("schema_version"), manifest.get("normalization_version")) not in {(1, 1), (2, 2)}:
+        raise ValueError("verification_subject_version_unsupported")
     validate_manifest_dag(root, manifest_path, manifest, validation_root)
     projection = build_subject_projection(root, state_text, change, objective_id, objective, manifest)
     digest = hashlib.sha256(
@@ -976,6 +1426,7 @@ def subject_digest(args: argparse.Namespace) -> tuple[dict, int]:
     return build_result(
         "subject-digest", None, [], manifest_enabled=True, manifest=manifest_reference,
         subject_digest=digest, subject_ids=[entry["subject_id"] for entry in projection["subjects"]],
+        schema_version=projection["schema_version"],
         normalization_version=projection["normalization_version"],
     ), 0
 
@@ -1001,7 +1452,7 @@ def verification_subject_context(
         root, state_text, change, load_json_object(logical_repo_path(root, plan_reference, must_exist=True))
     )
     validation_root = validation_root_for(root, change)
-    objective_digests: list[dict[str, str]] = []
+    objective_digests: list[dict[str, object]] = []
     subjects: dict[str, dict] = {}
     subject_owners: dict[str, str] = {}
     for objective in objectives:
@@ -1009,7 +1460,12 @@ def verification_subject_context(
         _, digest, projection = load_manifest_opt_in(
             root, change, objective_id, plan_reference, validation_root
         )
-        objective_digests.append({"objective_id": objective_id, "subject_digest": digest})
+        objective_digests.append({
+            "objective_id": objective_id,
+            "schema_version": projection["schema_version"],
+            "normalization_version": projection["normalization_version"],
+            "subject_digest": digest,
+        })
         for subject in projection.get("subjects", []):
             subject_id = str(subject["subject_id"])
             previous = subjects.get(subject_id)
@@ -1019,11 +1475,20 @@ def verification_subject_context(
                     raise ValueError("verification_subject_mapping_mismatch")
             subjects[subject_id] = subject
             subject_owners[subject_id] = objective_id
+    aggregate_version = 2 if any(entry["schema_version"] == 2 for entry in objective_digests) else 1
+    rendered_objective_digests = (
+        objective_digests
+        if aggregate_version == 2
+        else [
+            {"objective_id": entry["objective_id"], "subject_digest": entry["subject_digest"]}
+            for entry in objective_digests
+        ]
+    )
     aggregate = {
-        "schema_version": 1,
-        "normalization_version": 1,
+        "schema_version": aggregate_version,
+        "normalization_version": aggregate_version,
         "change_id": change,
-        "objective_digests": objective_digests,
+        "objective_digests": rendered_objective_digests,
         "subjects": [subjects[key] for key in sorted(subjects)],
     }
     digest = hashlib.sha256(
@@ -1181,6 +1646,22 @@ def accepted_current_evaluation(
         if not accepted:
             evaluations.append({"objective_id": objective_id, "accepted_current": False, "reason": "objective_not_accepted"})
             continue
+        expected_authorizations = authorization_obligations(events, objective_id)
+        if accepted.get("authorization_obligations", []) != expected_authorizations:
+            evaluations.append({
+                "objective_id": objective_id,
+                "accepted_current": False,
+                "reason": "resume_authorization_identity_mismatch",
+            })
+            continue
+        current_authorization_violations = authorization_current_violations(root, events, objective_id)
+        if current_authorization_violations:
+            evaluations.append({
+                "objective_id": objective_id,
+                "accepted_current": False,
+                "reason": current_authorization_violations[0]["code"],
+            })
+            continue
         try:
             manifest_reference, digest, projection = load_manifest_opt_in(
                 root,
@@ -1193,6 +1674,23 @@ def accepted_current_evaluation(
             evaluations.append({"objective_id": objective_id, "accepted_current": False, "reason": str(exc)})
             continue
         current_fingerprints = subject_fingerprints(projection)
+        current_version = (projection.get("schema_version"), projection.get("normalization_version"))
+        accepted_version = (
+            accepted.get("subject_schema_version", 1),
+            accepted.get("subject_normalization_version", 1),
+        )
+        if accepted_version != current_version:
+            evaluations.append({
+                "objective_id": objective_id,
+                "accepted_current": False,
+                "reason": "verification_subject_version_mismatch",
+                "accepted_digest": accepted.get("accepted_subject_digest"),
+                "current_digest": digest,
+                "changed_subject_ids": [],
+                "manifest": manifest_reference,
+                "accepted_obligations": accepted.get("accepted_obligations", {}),
+            })
+            continue
         accepted_fingerprints = accepted.get("accepted_subject_fingerprints", {})
         changed_subject_ids = sorted(
             subject_id
@@ -1319,6 +1817,7 @@ def whole_change_matrix_violations(
     subject_ids_by_objective: dict[str, set[str]] = {}
     evidence_by_subject: dict[str, dict[str, set[str]]] = {}
     manifest_by_objective: dict[str, str] = {}
+    version_by_objective: dict[str, int] = {}
     for objective in objectives:
         objective_id = str(objective["objective_id"])
         try:
@@ -1333,13 +1832,14 @@ def whole_change_matrix_violations(
             violations.append(item(str(exc), f"objective manifest 无法重算：{objective_id}"))
             continue
         manifest_by_objective[objective_id] = manifest_reference
+        version_by_objective[objective_id] = int(projection["schema_version"])
         subject_ids_by_objective[objective_id] = {entry["subject_id"] for entry in projection["subjects"]}
         evidence_by_subject[objective_id] = {
             str(entry["subject_id"]): set(str(value) for value in entry.get("required_evidence", []))
             for entry in projection["subjects"]
         }
         try:
-            obligation_pairs = projection_obligation_pairs(projection)
+            obligation_pairs = resolved_projection_obligation_pairs(projection, required_pairs)
         except ValueError as exc:
             violations.append(item(str(exc), f"subject obligations 无效：{objective_id}"))
             continue
@@ -1347,7 +1847,14 @@ def whole_change_matrix_violations(
             owner_subjects = [
                 str(subject["subject_id"])
                 for subject in projection["subjects"]
-                if pair in projection_obligation_pairs({"subjects": [subject]})
+                if pair in resolved_projection_obligation_pairs(
+                    {
+                        "schema_version": projection["schema_version"],
+                        "normalization_version": projection["normalization_version"],
+                        "subjects": [subject],
+                    },
+                    required_pairs,
+                )
             ]
             for subject_id in owner_subjects:
                 pair_owners.setdefault(pair, []).append((objective_id, subject_id))
@@ -1420,7 +1927,7 @@ def whole_change_matrix_violations(
         if event.get("event_type") == "objective_planned" and isinstance(event.get("boundary_matrix"), str):
             matrix_by_objective[str(event.get("objective_id"))] = str(event["boundary_matrix"])
     rows_by_boundary: dict[str, list[dict[str, str]]] = {}
-    expected_by_objective: dict[str, set[tuple[str, str]]] = {}
+    expected_by_objective: dict[str, set[tuple[str, ...]]] = {}
     for pair, (objective_id, _) in effective_owners.items():
         expected_by_objective.setdefault(objective_id, set()).add(pair)
     for objective_id, expected in expected_by_objective.items():
@@ -1433,10 +1940,21 @@ def whole_change_matrix_violations(
             continue
         if top.get("change_id") != change or top.get("objective_id") != objective_id:
             violations.append(item("boundary_matrix_invalid", f"objective matrix identity 不匹配：{objective_id}"))
-        actual: dict[tuple[str, str], int] = {}
+        try:
+            matrix_version = boundary_matrix_version(top)
+        except ValueError as exc:
+            violations.append(item(str(exc), f"objective matrix version 无效：{objective_id}"))
+            matrix_version = 0
+        if matrix_version != version_by_objective.get(objective_id):
+            violations.append(item("verification_subject_version_mismatch", f"objective matrix/manifest version 不一致：{objective_id}"))
+        actual: dict[tuple[str, ...], int] = {}
         for row in rows:
-            pair = (row.get("requirement_id", ""), row.get("scenario_id", ""))
-            actual[pair] = actual.get(pair, 0) + 1
+            try:
+                pair = resolve_matrix_row_identity(matrix_version, row, required_pairs)
+            except ValueError as exc:
+                violations.append(item(str(exc), f"whole-change row spec identity 无效：{row.get('row_id', '?')}"))
+            else:
+                actual[pair] = actual.get(pair, 0) + 1
             if row.get("status") != "covered":
                 violations.append(item("boundary_matrix_open", f"whole-change matrix row 未闭合：{row.get('row_id', '?')}"))
             row_subject_ids = set(split_csv(row.get("subject_ids", "")))
@@ -1476,6 +1994,23 @@ def coverage_check(args: argparse.Namespace) -> tuple[dict, int]:
         return error
     assert context is not None
     root, _, state_text, collaboration = context
+    try:
+        authorization_violations = authorization_current_violations(
+            root, read_events(root, collaboration)
+        )
+    except ValueError as exc:
+        authorization_violations = [item(str(exc), "resume authorization history 无法重算")]
+    if authorization_violations:
+        return build_result(
+            "coverage-check", None, authorization_violations, applicable=True, gate=args.gate,
+            blocking_reasons=[entry["code"] for entry in authorization_violations],
+        ), 1
+    schema_violations = matrix_schema_current_violations(root, args.change, collaboration)
+    if schema_violations:
+        return build_result(
+            "coverage-check", None, schema_violations, applicable=True, gate=args.gate,
+            blocking_reasons=[entry["code"] for entry in schema_violations],
+        ), 1
     if not collaboration.get("objective_plan"):
         return build_result("coverage-check", None, [], applicable=False, gate=args.gate), 0
     violations = objective_task_gate_violations(
@@ -1864,6 +2399,24 @@ def start_objective(args: argparse.Namespace) -> tuple[dict, int]:
         return error
     assert context is not None
     root, path, text, collaboration = context
+    if collaboration.get("profile") == PROFILE:
+        try:
+            current_authorization_violations = authorization_current_violations(
+                root, read_events(root, collaboration)
+            )
+        except ValueError as exc:
+            current_authorization_violations = [item(str(exc), "resume authorization history 无法重算")]
+        if current_authorization_violations:
+            return build_result(
+                "start", None, current_authorization_violations, changed=False,
+                blocking_reasons=[entry["code"] for entry in current_authorization_violations],
+            ), 1
+        schema_violations = matrix_schema_current_violations(root, args.change, collaboration)
+        if schema_violations:
+            return build_result(
+                "start", None, schema_violations, changed=False,
+                blocking_reasons=[entry["code"] for entry in schema_violations],
+            ), 1
     if yaml_nested_values(text, "openspec").get("spec_review_confirmed") != "true":
         return violation_result("start", "spec_review_not_confirmed", "用户尚未确认 OpenSpec review")
     implementation = yaml_nested_values(text, "implementation")
@@ -1993,6 +2546,10 @@ def start_objective(args: argparse.Namespace) -> tuple[dict, int]:
                 subject_ids=sorted(candidate_subject_ids),
                 remediates=sorted(remediates),
                 boundary_matrix=args.matrix,
+                **({
+                    "subject_schema_version": 2,
+                    "subject_normalization_version": 2,
+                } if manifest_projection.get("schema_version") == 2 else {}),
             )
             return build_result(
                 "start", None, [], applicable=True, changed=True, phase="planned",
@@ -2037,6 +2594,11 @@ def start_objective(args: argparse.Namespace) -> tuple[dict, int]:
             "subject_ids": [entry["subject_id"] for entry in manifest_projection.get("subjects", [])],
             "boundary_matrix": args.matrix,
         }
+        if manifest_projection.get("schema_version") == 2:
+            event_fields.update({
+                "subject_schema_version": 2,
+                "subject_normalization_version": 2,
+            })
     commit_state_event(
         root,
         path,
@@ -2062,6 +2624,84 @@ LEGAL_TRANSITIONS = {
     "executing": {"checkpoint", "blocked"},
     "checkpoint": {"executing", "blocked"},
 }
+
+
+def resume_objective(args: argparse.Namespace) -> tuple[dict, int]:
+    context, error = context_or_error("resume", args.change, recover_history=True)
+    if error:
+        return error
+    assert context is not None
+    root, path, text, collaboration = context
+    if collaboration["profile"] != PROFILE:
+        return violation_result("resume", "profile_not_active", "Reviewer–Executor profile 未启用")
+    events = read_events(root, collaboration)
+    head = events[-1] if events and events[-1].get("event_id") == collaboration.get("event_head") else {}
+    if collaboration.get("phase") == "executing" and head.get("event_type") == "objective_resumed":
+        if head.get("authorization") != args.authorization:
+            return violation_result("resume", "objective_not_blocked", "当前 objective 已不处于 blocked")
+        try:
+            current_authorization = sha256_file(logical_repo_path(root, str(head["authorization"]), must_exist=True))
+            current_approval = sha256_file(logical_repo_path(root, str(head["approval_evidence"]), must_exist=True))
+        except (KeyError, ValueError, FileNotFoundError, OSError):
+            return violation_result("resume", "resume_authorization_evidence_changed", "resume evidence 已不再匹配")
+        if (
+            current_authorization != head.get("authorization_sha256")
+            or current_approval != head.get("approval_evidence_sha256")
+        ):
+            return violation_result("resume", "resume_authorization_evidence_changed", "resume evidence 已不再匹配")
+        return build_result(
+            "resume", None, [], valid=True, changed=False, phase="executing",
+            history_recovered=collaboration.get("_history_recovered") == "true",
+        ), 0
+    if collaboration.get("phase") != "blocked" or collaboration.get("termination") == "explicit":
+        return violation_result("resume", "objective_not_blocked", "只有当前 blocked objective 可以恢复")
+    if head.get("event_type") != "blocked":
+        return violation_result("resume", "resume_blocked_event_stale", "当前 event head 不是 blocked event")
+    resume_timestamp = now_iso()
+    try:
+        authorization = validate_resume_authorization(
+            root, args.change, collaboration, head, args.authorization, resume_timestamp
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "resume_blocked_event_stale":
+            try:
+                envelope = load_strict_json_object(
+                    logical_repo_path(root, args.authorization, must_exist=True),
+                    "resume_authorization_invalid",
+                )
+                bound_event = envelope.get("blocked_event_id")
+                if any(
+                    event.get("event_type") == "objective_resumed"
+                    and event.get("blocked_event_id") == bound_event
+                    for event in events
+                ):
+                    reason = "resume_authorization_stale"
+            except (ValueError, FileNotFoundError):
+                pass
+        return violation_result("resume", reason, "blocked objective authorization 无效")
+    collaboration["phase"] = "executing"
+    commit_state_event(
+        root,
+        path,
+        text,
+        collaboration,
+        "objective_resumed",
+        change_id=args.change,
+        objective_id=collaboration["objective_id"],
+        round_id=collaboration["round_id"],
+        actor="executor",
+        from_phase="blocked",
+        to_phase="executing",
+        _event_timestamp=resume_timestamp,
+        **authorization,
+    )
+    return build_result(
+        "resume", None, [], changed=True, phase="executing",
+        blocked_event_id=authorization["blocked_event_id"],
+        approval_authority=authorization["approval_authority"],
+        history_recovered=collaboration.get("_history_recovered") == "true",
+    ), 0
 
 
 def transition_objective(args: argparse.Namespace) -> tuple[dict, int]:
@@ -2226,6 +2866,34 @@ def split_csv(value: str) -> list[str]:
     return [part.strip() for part in value.strip("[]").split(",") if part.strip()]
 
 
+def boundary_matrix_has_unknown_fields(
+    version: int, top: dict[str, str], rows: list[dict[str, str]]
+) -> bool:
+    allowed_top = {
+        "schema_version", "normalization_version", "change_id", "objective_id", "round_id",
+        "diff_base", "diff_artifact", "subject_manifest", "subject_digest", "rows",
+    }
+    allowed_row = {
+        "_line", "row_id", "requirement_id", "scenario_id", "boundary_id",
+        "owner", "invariant", "required_evidence", "evidence_refs", "status", "waiver_evidence",
+        "subject_ids", "systemic_closure",
+    }
+    if version == 2:
+        allowed_row.add("capability_id")
+    return bool(set(top) - allowed_top or any(set(row) - allowed_row for row in rows))
+
+
+def receipt_allowed_keys(required: tuple[str, ...], manifest_enabled: bool, subject_version: int) -> set[str]:
+    allowed = set(required) | {
+        "change_id", "objective_id", "round_id", "stdout_sha256", "stderr_sha256",
+    }
+    if manifest_enabled:
+        allowed |= {"manifest", "subject_digest", "subject_ids", "verification_tier", "host"}
+    if subject_version == 2:
+        allowed |= {"subject_schema_version", "subject_normalization_version"}
+    return allowed
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -2262,6 +2930,11 @@ def validate_receipt(
     if not isinstance(receipt, dict) or any(key not in receipt for key in required):
         return None, [item("receipt_schema_invalid", f"receipt 字段不完整：{receipt_path}")]
     manifest_enabled = bool(collaboration.get("objective_plan") and collaboration.get("subject_manifest"))
+    base_allowed_receipt_keys = receipt_allowed_keys(required, False, 1)
+    if receipt.get("schema_version") != 1:
+        violations.append(item("receipt_schema_invalid", f"receipt schema version 不受支持：{receipt_path}"))
+    if not manifest_enabled and set(receipt) - base_allowed_receipt_keys:
+        violations.append(item("receipt_schema_invalid", f"v1 receipt 含未知字段：{receipt_path}"))
     projection: dict = {}
     if manifest_enabled:
         extra_required = ("change_id", "objective_id", "manifest", "subject_digest", "subject_ids", "verification_tier", "host")
@@ -2275,12 +2948,31 @@ def validate_receipt(
             except ValueError as exc:
                 violations.append(item(str(exc), "当前 verification subject 无法重算"))
             else:
+                allowed_receipt_keys = receipt_allowed_keys(
+                    required, True, int(projection.get("schema_version", 0))
+                )
+                if set(receipt) - allowed_receipt_keys:
+                    violations.append(item(
+                        "receipt_schema_invalid",
+                        f"v{projection.get('schema_version')} receipt 含未知字段：{receipt_path}",
+                    ))
                 if receipt.get("change_id") != change or receipt.get("objective_id") != collaboration["objective_id"]:
                     violations.append(item("receipt_objective_mismatch", f"receipt change/objective 不匹配：{receipt_path}"))
                 if receipt.get("manifest") != manifest_reference:
                     violations.append(item("verification_subject_mapping_mismatch", f"receipt manifest pointer 不匹配：{receipt_path}"))
                 if receipt.get("subject_digest") != current_digest:
                     violations.append(item("verification_subject_digest_mismatch", f"receipt subject digest 已失效：{receipt_path}"))
+                projection_version = (projection.get("schema_version"), projection.get("normalization_version"))
+                receipt_version = (
+                    receipt.get("subject_schema_version", 1),
+                    receipt.get("subject_normalization_version", 1),
+                )
+                if receipt_version != projection_version:
+                    violations.append(item("verification_subject_version_mismatch", f"receipt subject version 不匹配：{receipt_path}"))
+                if projection_version == (1, 1) and (
+                    "subject_schema_version" in receipt or "subject_normalization_version" in receipt
+                ):
+                    violations.append(item("receipt_schema_invalid", f"v1 receipt 不得伪装 versioned subject：{receipt_path}"))
                 expected_subject_ids = sorted(entry["subject_id"] for entry in projection["subjects"])
                 if sorted(receipt.get("subject_ids", [])) != expected_subject_ids:
                     violations.append(item("verification_subject_mapping_mismatch", f"receipt subject IDs 不完整：{receipt_path}"))
@@ -2333,6 +3025,21 @@ def run_receipt(args: argparse.Namespace) -> tuple[dict, int]:
     root, _, text, collaboration = context
     if collaboration["profile"] != PROFILE:
         return violation_result("run-receipt", "profile_not_active", "Reviewer–Executor profile 未启用")
+    try:
+        authorization_violations = authorization_current_violations(root, read_events(root, collaboration))
+    except ValueError as exc:
+        authorization_violations = [item(str(exc), "resume authorization history 无法重算")]
+    if authorization_violations:
+        return build_result(
+            "run-receipt", None, authorization_violations, changed=False,
+            blocking_reasons=[entry["code"] for entry in authorization_violations],
+        ), 1
+    schema_violations = matrix_schema_current_violations(root, args.change, collaboration)
+    if schema_violations:
+        return build_result(
+            "run-receipt", None, schema_violations, changed=False,
+            blocking_reasons=[entry["code"] for entry in schema_violations],
+        ), 1
     manifest_enabled = bool(collaboration.get("objective_plan") and collaboration.get("subject_manifest"))
     dirty_source = non_evidence_dirty_paths(root, args.change)
     if dirty_source and not manifest_enabled:
@@ -2436,15 +3143,19 @@ def run_receipt(args: argparse.Namespace) -> tuple[dict, int]:
         "stderr_sha256": hashlib.sha256(completed.stderr).hexdigest(),
     }
     if manifest_enabled:
-        receipt.update(
-            {
-                "manifest": manifest_reference,
-                "subject_digest": current_digest,
-                "subject_ids": subject_ids,
-                "verification_tier": args.verification_tier,
-                "host": args.host,
-            }
-        )
+        subject_fields = {
+            "manifest": manifest_reference,
+            "subject_digest": current_digest,
+            "subject_ids": subject_ids,
+            "verification_tier": args.verification_tier,
+            "host": args.host,
+        }
+        if projection.get("schema_version") == 2:
+            subject_fields.update({
+                "subject_schema_version": 2,
+                "subject_normalization_version": 2,
+            })
+        receipt.update(subject_fields)
     output.parent.mkdir(parents=True, exist_ok=True)
     temp = output.with_name(f".{output.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -2572,7 +3283,14 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
     try:
         matrix_path = logical_repo_path(root, collaboration["boundary_matrix"], must_exist=True)
         top, rows = parse_boundary_matrix(matrix_path)
-        if top.get("schema_version") != "1" or top.get("change_id") != args.change:
+        try:
+            matrix_version = boundary_matrix_version(top)
+        except ValueError as exc:
+            matrix_version = 0
+            violations.append(item(str(exc), "matrix schema version 不受支持"))
+        if boundary_matrix_has_unknown_fields(matrix_version, top, rows):
+            violations.append(item("boundary_matrix_invalid", f"matrix schema v{matrix_version} 含未知字段"))
+        if top.get("change_id") != args.change:
             violations.append(item("boundary_matrix_invalid", "matrix schema/change 不匹配"))
         if top.get("objective_id") != collaboration["objective_id"] or top.get("round_id") != collaboration["round_id"]:
             violations.append(item("boundary_matrix_invalid", "matrix objective/round 不匹配"))
@@ -2587,6 +3305,11 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
                     str(entry["subject_id"]): set(str(value) for value in entry.get("required_evidence", []))
                     for entry in projection["subjects"]
                 }
+                if matrix_version != projection.get("schema_version"):
+                    violations.append(item(
+                        "verification_subject_version_mismatch",
+                        "matrix schema version 与当前 manifest 不一致",
+                    ))
                 if top.get("subject_manifest") != manifest_reference or top.get("subject_digest") != current_digest:
                     violations.append(item("verification_subject_mapping_mismatch", "matrix manifest pointer/digest 与当前 objective 不一致"))
             except ValueError as exc:
@@ -2594,10 +3317,15 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         if not rows:
             violations.append(item("boundary_matrix_open", "matrix 没有 required rows"))
         all_spec_pairs = required_spec_pairs(root, args.change)
+        if matrix_version == 1 and has_namespaced_spec_pairs(all_spec_pairs):
+            violations.append(item(
+                "verification_subject_schema_upgrade_required",
+                "namespaced/mixed Change 必须在 review-ready 前使用 matrix schema v2",
+            ))
         required_pairs = all_spec_pairs
         if manifest_enabled and "projection" in locals():
             try:
-                declared_pairs = projection_obligation_pairs(projection)
+                declared_pairs = resolved_projection_obligation_pairs(projection, all_spec_pairs)
             except ValueError as exc:
                 violations.append(item(str(exc), "current objective obligations 无法解析"))
                 declared_pairs = set()
@@ -2612,7 +3340,7 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
                 for pair in declared_pairs
                 if pair[0] == "@composition" or pair in all_spec_pairs
             }
-        row_pairs: dict[tuple[str, str], list[str]] = {}
+        row_pairs: dict[tuple[str, ...], list[str]] = {}
         for row in rows:
             required_keys = ("row_id", "requirement_id", "scenario_id", "boundary_id", "owner", "invariant", "required_evidence", "evidence_refs", "status")
             if any(not row.get(key) for key in required_keys):
@@ -2629,8 +3357,12 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
                 ) if row_subject_ids else set()
                 if not manifest_types.issubset(declared_types):
                     violations.append(item("boundary_evidence_missing", f"matrix row 未声明 manifest required evidence：{row.get('row_id', '?')}"))
-            pair = (row["requirement_id"], row["scenario_id"])
-            row_pairs.setdefault(pair, []).append(row.get("row_id", row.get("_line", "?")))
+            try:
+                pair = resolve_matrix_row_identity(matrix_version, row, required_pairs)
+            except ValueError as exc:
+                violations.append(item(str(exc), f"matrix row spec identity 无效：{row.get('row_id', '?')}"))
+            else:
+                row_pairs.setdefault(pair, []).append(row.get("row_id", row.get("_line", "?")))
             if row["status"] in {"open", "failed"}:
                 violations.append(item("boundary_matrix_open", f"matrix row 未闭合：{row['row_id']}"))
             if row["status"] == "waived":
@@ -2645,11 +3377,11 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         unknown_pairs = sorted(set(row_pairs) - set(required_pairs))
         duplicate_pairs = sorted(pair for pair, row_ids in row_pairs.items() if len(row_ids) > 1)
         for pair in missing_pairs:
-            violations.append(item("spec_mapping_incomplete", f"matrix 缺少 delta spec scenario：{pair[0]}/{pair[1]}"))
+            violations.append(item("spec_mapping_incomplete", f"matrix 缺少 delta spec scenario：{'/'.join(pair)}"))
         for pair in unknown_pairs:
-            violations.append(item("spec_mapping_unknown", f"matrix 引用了未知 delta spec scenario：{pair[0]}/{pair[1]}"))
+            violations.append(item("spec_mapping_unknown", f"matrix 引用了未知 delta spec scenario：{'/'.join(pair)}"))
         for pair in duplicate_pairs:
-            violations.append(item("spec_mapping_duplicate", f"matrix 重复映射 delta spec scenario：{pair[0]}/{pair[1]}"))
+            violations.append(item("spec_mapping_duplicate", f"matrix 重复映射 delta spec scenario：{'/'.join(pair)}"))
         if manifest_enabled and matrix_subject_ids != expected_subject_ids:
             violations.append(item("verification_subject_mapping_mismatch", "matrix subject IDs 未完整且唯一映射当前 manifest"))
 
@@ -2767,6 +3499,7 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
     except ValueError as exc:
         violations.append(item("event_log_invalid", str(exc)))
         events = []
+    violations.extend(authorization_current_violations(root, events, collaboration["objective_id"]))
     for boundary in systemic_boundaries(events):
         boundary_rows = [row for row in rows if row.get("boundary_id") == boundary]
         if not boundary_rows or any(row.get("status") != "covered" for row in boundary_rows):
@@ -2793,6 +3526,11 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
                 "subject_fingerprints": subject_fingerprints(projection),
                 "subject_obligations": subject_obligations(projection),
             }
+            if projection.get("schema_version") == 2:
+                ready_subject_fields.update({
+                    "subject_schema_version": 2,
+                    "subject_normalization_version": 2,
+                })
         review_artifact_hashes = {
             report_reference: sha256_file(report_path),
             matrix_reference: sha256_file(matrix_path),
@@ -2811,6 +3549,7 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
             report=collaboration["latest_report"],
             receipts=list(dict.fromkeys(receipt_refs)),
             review_artifact_hashes=review_artifact_hashes,
+            authorization_obligations=authorization_obligations(events, collaboration["objective_id"]),
             **ready_subject_fields,
         )
     return build_result(
@@ -2859,6 +3598,45 @@ def review_decision(args: argparse.Namespace) -> tuple[dict, int]:
     root, path, text, collaboration = context
     if collaboration["profile"] != PROFILE:
         return violation_result("review-decision", "profile_not_active", "Reviewer–Executor profile 未启用")
+    try:
+        current_events = read_events(root, collaboration)
+        current_authorization_violations = authorization_current_violations(
+            root, current_events, collaboration["objective_id"]
+        )
+    except ValueError as exc:
+        current_authorization_violations = [item(str(exc), "resume authorization history 无法重算")]
+    if current_authorization_violations:
+        return build_result(
+            "review-decision", None, current_authorization_violations, changed=False,
+            phase=collaboration["phase"],
+            blocking_reasons=[entry["code"] for entry in current_authorization_violations],
+        ), 1
+    if collaboration.get("objective_plan") and collaboration.get("subject_manifest"):
+        try:
+            _, predecessor_evaluations = accepted_current_evaluation(
+                root, text, args.change, collaboration, include_current=False
+            )
+            predecessor_violations = accepted_current_violations(predecessor_evaluations, "review-decision")
+            if current_remediation_covers(root, args.change, collaboration, predecessor_evaluations):
+                predecessor_violations = [
+                    entry for entry in predecessor_violations
+                    if entry["code"] != "accepted_objective_subject_stale"
+                ]
+        except ValueError as exc:
+            predecessor_violations = [item(str(exc), "accepted predecessors 无法重算")]
+        if predecessor_violations:
+            return build_result(
+                "review-decision", None, predecessor_violations, changed=False,
+                phase=collaboration["phase"],
+                blocking_reasons=[entry["code"] for entry in predecessor_violations],
+            ), 1
+    schema_violations = matrix_schema_current_violations(root, args.change, collaboration)
+    if schema_violations:
+        return build_result(
+            "review-decision", None, schema_violations, changed=False,
+            phase=collaboration["phase"],
+            blocking_reasons=[entry["code"] for entry in schema_violations],
+        ), 1
     if collaboration["phase"] == "accepted" and args.decision == "accepted":
         return build_result(
             "review-decision", None, [], changed=False, phase="accepted",
@@ -2928,6 +3706,28 @@ def review_decision(args: argparse.Namespace) -> tuple[dict, int]:
                     "review-decision",
                     "verification_subject_digest_mismatch",
                     "当前 subject 与通过 review-ready 的冻结对象不一致",
+                    changed=False,
+                    phase="review_ready",
+                )
+            projection_version = (projection.get("schema_version"), projection.get("normalization_version"))
+            ready_version = (
+                ready_event.get("subject_schema_version", 1),
+                ready_event.get("subject_normalization_version", 1),
+            )
+            if ready_version != projection_version:
+                return violation_result(
+                    "review-decision",
+                    "verification_subject_version_mismatch",
+                    "review-ready subject version 与当前 manifest 不一致",
+                    changed=False,
+                    phase="review_ready",
+                )
+            current_authorizations = authorization_obligations(events, collaboration["objective_id"])
+            if ready_event.get("authorization_obligations", []) != current_authorizations:
+                return violation_result(
+                    "review-decision",
+                    "resume_authorization_identity_mismatch",
+                    "review-ready authorization obligations 与当前 history 不一致",
                     changed=False,
                     phase="review_ready",
                 )
@@ -3012,6 +3812,14 @@ def review_decision(args: argparse.Namespace) -> tuple[dict, int]:
                 "accepted_obligations": ready_event.get("subject_obligations", {}),
                 "evidence_refs": ready_receipts,
             }
+            if projection.get("schema_version") == 2:
+                acceptance_fields.update({
+                    "subject_schema_version": 2,
+                    "subject_normalization_version": 2,
+                })
+        acceptance_fields["authorization_obligations"] = authorization_obligations(
+            current_events, collaboration["objective_id"]
+        )
         collaboration["phase"] = "accepted"
         commit_state_event(
             root,
@@ -3117,6 +3925,10 @@ def make_parser() -> argparse.ArgumentParser:
     transition.add_argument("--evidence-ref", action="append", default=[])
     transition.add_argument("--required-decision")
     transition.add_argument("--json", action="store_true")
+    resume = sub.add_parser("resume", allow_abbrev=False)
+    resume.add_argument("--change", required=True)
+    resume.add_argument("--authorization", required=True)
+    resume.add_argument("--json", action="store_true")
     finding = sub.add_parser("record-finding", allow_abbrev=False)
     finding.add_argument("--change", required=True)
     finding.add_argument("--defect-class", required=True)
@@ -3174,6 +3986,7 @@ def main() -> int:
         "subject-digest": subject_digest,
         "start": start_objective,
         "transition": transition_objective,
+        "resume": resume_objective,
         "record-finding": record_finding,
         "run-receipt": run_receipt,
         "receipt-check": receipt_check,

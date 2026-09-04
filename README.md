@@ -30,22 +30,28 @@ Zimaflow is not an AI coding agent, a project-management system, or a copy of
 your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
 give their coding capabilities a reliable engineering process.
 
-## What's new in 1.22.7
+## What's new in 1.22.8
 
-Zimaflow 1.22.7 makes the optional Reviewer–Executor workflow more efficient
-for medium and large changes:
+Zimaflow 1.22.8 lets the optional Reviewer–Executor workflow describe larger
+specification sets, and makes one lifecycle rule consistent across commands:
 
-- An objective review scope groups related tasks or one vertical slice into a
-  single formal review. Internal checkpoints run focused checks without
-  producing a full Report and receipt for every task.
-- A canonical verification subject separates code, specifications, tests,
-  contracts, migrations, and behavioral configuration from evidence metadata.
-  Metadata-only updates do not invalidate valid verification evidence.
-- Accepted history stays immutable, while current acceptance is recalculated
-  when later objectives change an earlier objective's semantic inputs.
+- Specifications are discovered recursively, so a namespaced layout such as
+  `specs/recall/index/spec.md` keeps its full capability identity. Two files
+  that share a basename in different namespaces no longer shadow each other.
+- Requirement and scenario identities accept Unicode, so titles written in
+  Chinese or in mixed scripts produce stable, readable identities instead of
+  collapsing to nothing. Pure ASCII identities are unchanged byte for byte.
+- A blocked objective can resume on the same objective and round, but only
+  through explicit approval evidence recorded separately from the executor's
+  own authorization. There is no automatic recovery and no history rewrite.
+- `state`, `recall`, `close`, and `release-check` now share one definition of
+  an active change: work still open in the changes tree, plus an archived
+  state this session touched and has yet to finalize. Older archived debt
+  stays visible to `state` and reachable by `finalize`, without being raised
+  again in every later session.
 
 The workflow remains opt-in. The default single-agent path stays lightweight,
-and existing no-manifest Reviewer–Executor changes remain compatible.
+and existing flat-specification evidence keeps its previous identity.
 
 ## How it works
 
@@ -78,7 +84,7 @@ every task into a compliance ceremony.
 ## Quick start
 
 Install the CLI for the host you use before adding Zimaflow. This checkout
-contains Zimaflow 1.22.7.
+contains Zimaflow 1.22.8.
 
 Claude Code:
 
@@ -172,7 +178,7 @@ changes. For this release:
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.7
+git checkout v1.22.8
 ./verify-release.sh --distribution .
 ```
 

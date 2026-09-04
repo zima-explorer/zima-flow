@@ -43,7 +43,7 @@ session 收尾：reconciler 检查一致性，handover 写回最新入口
 | 知道项目名但不在目录 | `zimaflow recall --project <name>` |
 | 多项目回看 | `zimaflow recall --all` |
 
-Agent 读取 recall 输出后，再按 active change 的 state、handover summary、bit-rot next_action 决定继续当前阶段、刷新 handover、重跑测试或请求人工确认。
+Agent 读取 recall 输出后，再按 session-active change 的 state、handover summary、bit-rot next_action 决定继续当前阶段、刷新 handover、重跑测试或请求人工确认。session-active 与 `state` / `close` 共用生命周期分类：live changes tree 中非 `closed` 的 state，以及本轮触碰且待 finalize 的 archived state；历史 legacy archived state 保持可审计、可显式 finalize，但不会被每个新 session 重新召回。
 
 ### 2. 进行中：阶段状态
 

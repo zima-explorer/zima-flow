@@ -1061,6 +1061,13 @@ SET_ARRAY_KEYS = {
     "spec_pairs",
     "subject_ids",
 }
+OBLIGATION_SET_FIELDS = {
+    "refs", "spec_pairs", "requirement_ids", "scenario_ids", "required_evidence",
+}
+OBLIGATION_EXACT_FIELDS = {
+    "kind", "boundary_id", "invariant", "owner", "verification_contract",
+}
+OBLIGATION_FIELDS = OBLIGATION_SET_FIELDS | OBLIGATION_EXACT_FIELDS
 
 
 def projection_obligation_pairs(projection: dict) -> set[tuple[str, ...]]:
@@ -1268,7 +1275,7 @@ def build_subject_projection(
     allowed_subject_keys = {
         "subject_id", "kind", "refs", "semantic_inputs", "requirement_ids", "scenario_ids",
         "spec_pairs", "boundary_id", "owner", "invariant", "required_evidence",
-        "verification_contract", "metadata",
+        "verification_contract", "obligation_versions", "metadata",
     }
     version = (manifest.get("schema_version"), manifest.get("normalization_version"))
     if version not in {(1, 1), (2, 2)}:
@@ -1303,6 +1310,7 @@ def build_subject_projection(
         inputs = raw_subject.get("semantic_inputs")
         evidence = raw_subject.get("required_evidence")
         contract = raw_subject.get("verification_contract")
+        raw_obligation_versions = raw_subject.get("obligation_versions", [])
         raw_spec_pairs = raw_subject.get("spec_pairs", [])
         pair_keys = (
             {"requirement_id", "scenario_id"}
@@ -1325,6 +1333,7 @@ def build_subject_projection(
             or not all(isinstance(value, str) and value for value in evidence)
             or not isinstance(contract, dict)
             or not contract
+            or not isinstance(raw_obligation_versions, list)
             or not isinstance(raw_spec_pairs, list)
             or any(not isinstance(pair, dict) or set(pair) != pair_keys for pair in raw_spec_pairs)
         ):
@@ -1355,6 +1364,61 @@ def build_subject_projection(
             {normalize_semantic_text(str(value)) for value in evidence}
         )
         semantic_subject["verification_contract"] = normalize_contract_value(contract)
+        if raw_obligation_versions:
+            normalized_versions: list[dict[str, object]] = []
+            source_objective_ids: set[str] = set()
+            for raw_version in raw_obligation_versions:
+                if not isinstance(raw_version, dict) or set(raw_version) != {"source_objective_id", "obligation"}:
+                    raise ValueError("verification_subject_manifest_invalid")
+                source_objective_id = raw_version.get("source_objective_id")
+                raw_obligation = raw_version.get("obligation")
+                if (
+                    not isinstance(source_objective_id, str)
+                    or not source_objective_id
+                    or source_objective_id == objective_id
+                    or source_objective_id in source_objective_ids
+                    or not isinstance(raw_obligation, dict)
+                    or set(raw_obligation) != OBLIGATION_FIELDS
+                ):
+                    raise ValueError("verification_subject_manifest_invalid")
+                source_objective_ids.add(source_objective_id)
+                version_refs = raw_obligation.get("refs")
+                version_pairs = raw_obligation.get("spec_pairs")
+                version_evidence = raw_obligation.get("required_evidence")
+                version_contract = raw_obligation.get("verification_contract")
+                if (
+                    not isinstance(raw_obligation.get("kind"), str)
+                    or not isinstance(version_refs, list)
+                    or not version_refs
+                    or not all(isinstance(reference, str) and reference.startswith("repo://") for reference in version_refs)
+                    or not isinstance(version_pairs, list)
+                    or any(not isinstance(pair, dict) or set(pair) != pair_keys for pair in version_pairs)
+                    or not all(
+                        isinstance(raw_obligation.get(field), list)
+                        and all(isinstance(value, str) and value for value in raw_obligation.get(field, []))
+                        for field in ("requirement_ids", "scenario_ids")
+                    )
+                    or not all(isinstance(raw_obligation.get(field), str) for field in ("boundary_id", "invariant", "owner"))
+                    or not isinstance(version_evidence, list)
+                    or not version_evidence
+                    or not all(isinstance(value, str) and value for value in version_evidence)
+                    or not isinstance(version_contract, dict)
+                    or not version_contract
+                ):
+                    raise ValueError("verification_subject_manifest_invalid")
+                normalized_obligation = dict(raw_obligation)
+                normalized_obligation["refs"] = sorted(
+                    {normalized_repo_reference(root, reference) for reference in version_refs}
+                )
+                normalized_obligation["verification_contract"] = normalize_contract_value(version_contract)
+                normalized_versions.append(normalize_contract_value({
+                    "source_objective_id": source_objective_id,
+                    "obligation": normalized_obligation,
+                }))
+            semantic_subject["obligation_versions"] = sorted(
+                normalized_versions,
+                key=lambda entry: json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            )
         normalized_subjects.append(normalize_contract_value(semantic_subject))
     return {
         "schema_version": version[0],
@@ -1425,7 +1489,7 @@ def subject_digest(args: argparse.Namespace) -> tuple[dict, int]:
         return violation_result("subject-digest", str(exc), "objective plan 或 subject manifest 无效")
     return build_result(
         "subject-digest", None, [], manifest_enabled=True, manifest=manifest_reference,
-        subject_digest=digest, subject_ids=[entry["subject_id"] for entry in projection["subjects"]],
+        subject_digest=digest, subject_ids=sorted({entry["subject_id"] for entry in projection["subjects"]}),
         schema_version=projection["schema_version"],
         normalization_version=projection["normalization_version"],
     ), 0
@@ -1552,18 +1616,29 @@ def objective_assignment_violations(
 def receipt_provenance_authorized(root: Path, receipt: dict, projection: dict) -> bool:
     if receipt.get("cwd") != str(root):
         return False
-    host = receipt.get("host")
-    isolation = receipt.get("isolation_id")
     subject_ids = set(receipt.get("subject_ids", []))
-    for subject in projection.get("subjects", []):
-        if subject.get("subject_id") not in subject_ids:
-            continue
-        contract = subject.get("verification_contract", {})
-        allowed_hosts = contract.get("allowed_hosts", [])
-        allowed_isolation = contract.get("allowed_isolation", [])
-        if host not in allowed_hosts or isolation not in allowed_isolation:
+    for subject_id in subject_ids:
+        matching = [
+            subject for subject in projection.get("subjects", [])
+            if subject.get("subject_id") == subject_id
+        ]
+        if not matching or not any(
+            receipt_authorized_for_obligation(root, receipt, record["obligation"])
+            for subject in matching
+            for record in subject_obligation_records(projection, subject)
+        ):
             return False
     return True
+
+
+def receipt_authorized_for_obligation(root: Path, receipt: dict, obligation: dict) -> bool:
+    if receipt.get("cwd") != str(root):
+        return False
+    contract = obligation.get("verification_contract", {})
+    return (
+        receipt.get("host") in contract.get("allowed_hosts", [])
+        and receipt.get("isolation_id") in contract.get("allowed_isolation", [])
+    )
 
 
 def subject_fingerprints(projection: dict) -> dict[str, str]:
@@ -1575,52 +1650,124 @@ def subject_fingerprints(projection: dict) -> dict[str, str]:
     }
 
 
-def subject_obligations(projection: dict) -> dict[str, dict]:
-    """Freeze the reviewer-owned obligation contract, excluding implementation bytes."""
-    obligations: dict[str, dict] = {}
+def subject_obligation(subject: dict) -> dict:
+    """Project one reviewer-owned obligation, excluding implementation bytes."""
+    subject_id = str(subject["subject_id"])
+    return normalize_contract_value(
+        {
+            "subject_id": subject_id,
+            "kind": subject.get("kind", ""),
+            "refs": subject.get("refs", []),
+            "spec_pairs": subject.get("spec_pairs", []),
+            "requirement_ids": subject.get("requirement_ids", []),
+            "scenario_ids": subject.get("scenario_ids", []),
+            "boundary_id": subject.get("boundary_id", ""),
+            "invariant": subject.get("invariant", ""),
+            "owner": subject.get("owner", ""),
+            "required_evidence": subject.get("required_evidence", []),
+            "verification_contract": subject.get("verification_contract", {}),
+        }
+    )
+
+
+def subject_obligation_records(projection: dict, subject: dict) -> list[dict]:
+    """Return current plus carried obligation generations in canonical order."""
+    subject_id = str(subject["subject_id"])
+    records = [
+        normalize_contract_value({
+            "source_objective_id": str(projection.get("objective_id", "")),
+            "obligation": subject_obligation(subject),
+        })
+    ]
+    for version in subject.get("obligation_versions", []):
+        obligation = dict(version["obligation"])
+        obligation["subject_id"] = subject_id
+        records.append(normalize_contract_value({
+            "source_objective_id": str(version["source_objective_id"]),
+            "obligation": obligation,
+        }))
+    return sorted(
+        records,
+        key=lambda entry: json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+    )
+
+
+def subject_obligations(projection: dict) -> dict[str, object]:
+    """Freeze obligation lineage while preserving the legacy event shape when unused."""
+    obligations: dict[str, object] = {}
     for subject in projection.get("subjects", []):
         subject_id = str(subject["subject_id"])
-        obligations[subject_id] = normalize_contract_value(
-            {
-                "subject_id": subject_id,
-                "kind": subject.get("kind", ""),
-                "refs": subject.get("refs", []),
-                "spec_pairs": subject.get("spec_pairs", []),
-                "requirement_ids": subject.get("requirement_ids", []),
-                "scenario_ids": subject.get("scenario_ids", []),
-                "boundary_id": subject.get("boundary_id", ""),
-                "invariant": subject.get("invariant", ""),
-                "owner": subject.get("owner", ""),
-                "required_evidence": subject.get("required_evidence", []),
-                "verification_contract": subject.get("verification_contract", {}),
-            }
-        )
+        if subject.get("obligation_versions"):
+            obligations[subject_id] = subject_obligation_records(projection, subject)
+        else:
+            obligations[subject_id] = subject_obligation(subject)
     return obligations
 
 
-def obligations_cover(frozen: object, candidate_projection: dict) -> bool:
+def obligation_semantically_covers(accepted: dict, current: dict) -> bool:
+    for field in OBLIGATION_EXACT_FIELDS:
+        if current.get(field) != accepted.get(field):
+            return False
+    for field in OBLIGATION_SET_FIELDS:
+        accepted_values = {
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for value in accepted.get(field, [])
+        }
+        current_values = {
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for value in current.get(field, [])
+        }
+        if not accepted_values.issubset(current_values):
+            return False
+    return True
+
+
+def obligations_cover(
+    frozen: object, candidate_projection: dict, source_objective_id: str | None = None
+) -> bool:
     if not isinstance(frozen, dict) or not frozen:
         return False
-    candidate = subject_obligations(candidate_projection)
-    set_fields = {"refs", "spec_pairs", "requirement_ids", "scenario_ids", "required_evidence"}
-    exact_fields = {"kind", "boundary_id", "invariant", "owner", "verification_contract"}
-    for subject_id, accepted in frozen.items():
-        current = candidate.get(str(subject_id))
-        if not isinstance(accepted, dict) or not isinstance(current, dict):
+    candidate_records = {
+        str(subject["subject_id"]): subject_obligation_records(candidate_projection, subject)
+        for subject in candidate_projection.get("subjects", [])
+    }
+    candidate_versioned_by_id = {
+        str(subject["subject_id"]): bool(subject.get("obligation_versions"))
+        for subject in candidate_projection.get("subjects", [])
+    }
+    for subject_id, accepted_value in frozen.items():
+        if isinstance(accepted_value, dict):
+            accepted_records = [{
+                "source_objective_id": source_objective_id or "",
+                "obligation": accepted_value,
+            }]
+        elif isinstance(accepted_value, list) and accepted_value:
+            accepted_records = accepted_value
+        else:
             return False
-        for field in exact_fields:
-            if current.get(field) != accepted.get(field):
+        current_records = candidate_records.get(str(subject_id), [])
+        for accepted_record in accepted_records:
+            if (
+                not isinstance(accepted_record, dict)
+                or set(accepted_record) != {"source_objective_id", "obligation"}
+                or not isinstance(accepted_record.get("source_objective_id"), str)
+                or not isinstance(accepted_record.get("obligation"), dict)
+            ):
                 return False
-        for field in set_fields:
-            accepted_values = {
-                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                for value in accepted.get(field, [])
-            }
-            current_values = {
-                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                for value in current.get(field, [])
-            }
-            if not accepted_values.issubset(current_values):
+            matches = [
+                current_record
+                for current_record in current_records
+                if (
+                    not candidate_versioned_by_id.get(str(subject_id), False)
+                    or current_record.get("source_objective_id") == accepted_record["source_objective_id"]
+                )
+            ]
+            if not any(
+                obligation_semantically_covers(
+                    accepted_record["obligation"], current_record["obligation"]
+                )
+                for current_record in matches
+            ):
                 return False
     return True
 
@@ -1747,7 +1894,9 @@ def accepted_current_evaluation(
                 )
             except ValueError:
                 continue
-            if obligations_cover(stale.get("accepted_obligations"), remediation_projection):
+            if obligations_cover(
+                stale.get("accepted_obligations"), remediation_projection, stale_id
+            ):
                 replacements.append(remediation_id)
         if replacements:
             stale["coverage_satisfied"] = True
@@ -1791,7 +1940,9 @@ def current_remediation_covers(
     if not stale_ids.issubset(set(current.get("remediates", []))):
         return False
     for evaluation in stale:
-        if not obligations_cover(evaluation.get("accepted_obligations"), current_projection):
+        if not obligations_cover(
+            evaluation.get("accepted_obligations"), current_projection, str(evaluation["objective_id"])
+        ):
             evaluation["remediation_reason"] = "remediation_obligation_incomplete"
             return False
     for evaluation in stale:
@@ -1818,6 +1969,7 @@ def whole_change_matrix_violations(
     evidence_by_subject: dict[str, dict[str, set[str]]] = {}
     manifest_by_objective: dict[str, str] = {}
     version_by_objective: dict[str, int] = {}
+    projection_by_objective: dict[str, dict] = {}
     for objective in objectives:
         objective_id = str(objective["objective_id"])
         try:
@@ -1833,6 +1985,7 @@ def whole_change_matrix_violations(
             continue
         manifest_by_objective[objective_id] = manifest_reference
         version_by_objective[objective_id] = int(projection["schema_version"])
+        projection_by_objective[objective_id] = projection
         subject_ids_by_objective[objective_id] = {entry["subject_id"] for entry in projection["subjects"]}
         evidence_by_subject[objective_id] = {
             str(entry["subject_id"]): set(str(value) for value in entry.get("required_evidence", []))
@@ -1981,6 +2134,14 @@ def whole_change_matrix_violations(
             violations.append(item(code, f"objective matrix spec mapping 不完整：{objective_id}"))
         if any(count > 1 for count in actual.values()):
             violations.append(item("spec_mapping_duplicate", f"objective matrix 重复 spec pair：{objective_id}"))
+        projection = projection_by_objective.get(objective_id)
+        if projection:
+            violations.extend(versioned_obligation_receipt_violations(
+                root,
+                projection,
+                rows,
+                valid_receipts_by_objective.get(objective_id, {}),
+            ))
     for boundary in systemic_boundaries(events):
         rows = rows_by_boundary.get(boundary, [])
         if not rows or any(row.get("status") != "covered" for row in rows):
@@ -2058,6 +2219,7 @@ def coverage_check(args: argparse.Namespace) -> tuple[dict, int]:
             violations.append(item(code, f"{args.gate} gate 缺少对应 tier receipt"))
         candidate_violations: list[dict[str, str]] = []
         has_valid_candidate = False
+        valid_gate_receipts: list[dict] = []
         for reference in receipt_references:
             try:
                 receipt_path = logical_repo_path(root, reference, must_exist=True)
@@ -2080,6 +2242,8 @@ def coverage_check(args: argparse.Namespace) -> tuple[dict, int]:
             )
             candidate_violations.extend(receipt_violations)
             has_valid_candidate = has_valid_candidate or bool(receipt and not receipt_violations)
+            if receipt and not receipt_violations:
+                valid_gate_receipts.append(receipt)
             if receipt:
                 receipt_results.append(
                     {"reference": reference, "verification_tier": receipt.get("verification_tier"),
@@ -2088,6 +2252,15 @@ def coverage_check(args: argparse.Namespace) -> tuple[dict, int]:
                 )
         if explicit_receipts or not has_valid_candidate:
             violations.extend(candidate_violations)
+        try:
+            _, _, gate_projection = verification_subject_context(
+                root, args.change, collaboration, args.gate
+            )
+            violations.extend(versioned_gate_receipt_violations(
+                root, gate_projection, valid_gate_receipts
+            ))
+        except ValueError as exc:
+            violations.append(item(str(exc), f"{args.gate} obligation receipt coverage 无法重算"))
     task_codes = {entry["code"] for entry in objective_task_gate_violations(
         root, state_text, args.change, collaboration, whole_change=args.gate in {"whole-change", "release"}
     )}
@@ -2142,7 +2315,7 @@ def mark_implemented(args: argparse.Namespace) -> tuple[dict, int]:
         actor="executor",
         subject_manifest=manifest_reference,
         subject_digest=digest,
-        subject_ids=sorted(entry["subject_id"] for entry in projection["subjects"]),
+        subject_ids=sorted({entry["subject_id"] for entry in projection["subjects"]}),
         required_task_ids=sorted(entry["task_id"] for entry in projection["required_tasks"]),
     )
     return build_result("mark-implemented", None, [], changed=True, implemented=True, subject_digest=digest), 0
@@ -2866,6 +3039,76 @@ def split_csv(value: str) -> list[str]:
     return [part.strip() for part in value.strip("[]").split(",") if part.strip()]
 
 
+def versioned_obligation_receipt_violations(
+    root: Path,
+    projection: dict,
+    rows: list[dict[str, str]],
+    valid_receipts_by_ref: dict[str, dict],
+) -> list[dict[str, str]]:
+    """Require row receipts to prove every carried contract/evidence generation."""
+    if not any(subject.get("obligation_versions") for subject in projection.get("subjects", [])):
+        return []
+    violations: list[dict[str, str]] = []
+    subjects_by_id = {
+        str(subject["subject_id"]): subject for subject in projection.get("subjects", [])
+    }
+    for row in rows:
+        if row.get("status") == "waived":
+            continue
+        row_receipts = [
+            valid_receipts_by_ref[reference]
+            for reference in split_csv(row.get("evidence_refs", ""))
+            if reference in valid_receipts_by_ref
+        ]
+        for subject_id in split_csv(row.get("subject_ids", "")):
+            subject = subjects_by_id.get(subject_id)
+            if not subject:
+                continue
+            for record in subject_obligation_records(projection, subject):
+                source = str(record["source_objective_id"])
+                obligation = record["obligation"]
+                for evidence_type in obligation.get("required_evidence", []):
+                    typed = [
+                        receipt for receipt in row_receipts
+                        if receipt.get("evidence_type") == evidence_type
+                    ]
+                    if not typed:
+                        violations.append(item(
+                            "boundary_evidence_missing",
+                            f"obligation version 缺少 evidence：{subject_id}@{source}/{evidence_type}",
+                        ))
+                    elif not any(
+                        receipt_authorized_for_obligation(root, receipt, obligation)
+                        for receipt in typed
+                    ):
+                        violations.append(item(
+                            "receipt_provenance_unauthorized",
+                            f"obligation version evidence provenance 未授权：{subject_id}@{source}/{evidence_type}",
+                        ))
+    return violations
+
+
+def versioned_gate_receipt_violations(
+    root: Path, projection: dict, valid_receipts: list[dict]
+) -> list[dict[str, str]]:
+    """Require whole/release receipts collectively to reach every contract generation."""
+    if not any(subject.get("obligation_versions") for subject in projection.get("subjects", [])):
+        return []
+    violations: list[dict[str, str]] = []
+    for subject in projection.get("subjects", []):
+        subject_id = str(subject["subject_id"])
+        for record in subject_obligation_records(projection, subject):
+            if not any(
+                receipt_authorized_for_obligation(root, receipt, record["obligation"])
+                for receipt in valid_receipts
+            ):
+                violations.append(item(
+                    "receipt_provenance_unauthorized",
+                    f"gate receipts 未覆盖 obligation contract：{subject_id}@{record['source_objective_id']}",
+                ))
+    return violations
+
+
 def boundary_matrix_has_unknown_fields(
     version: int, top: dict[str, str], rows: list[dict[str, str]]
 ) -> bool:
@@ -2973,7 +3216,7 @@ def validate_receipt(
                     "subject_schema_version" in receipt or "subject_normalization_version" in receipt
                 ):
                     violations.append(item("receipt_schema_invalid", f"v1 receipt 不得伪装 versioned subject：{receipt_path}"))
-                expected_subject_ids = sorted(entry["subject_id"] for entry in projection["subjects"])
+                expected_subject_ids = sorted({entry["subject_id"] for entry in projection["subjects"]})
                 if sorted(receipt.get("subject_ids", [])) != expected_subject_ids:
                     violations.append(item("verification_subject_mapping_mismatch", f"receipt subject IDs 不完整：{receipt_path}"))
                 expected_tier = next(
@@ -3091,7 +3334,7 @@ def run_receipt(args: argparse.Namespace) -> tuple[dict, int]:
             )
         except ValueError as exc:
             return violation_result("run-receipt", str(exc), "当前 verification subject 无法重算")
-        subject_ids = sorted(entry["subject_id"] for entry in projection["subjects"])
+        subject_ids = sorted({entry["subject_id"] for entry in projection["subjects"]})
         provisional = {
             "cwd": str(root),
             "host": args.host,
@@ -3110,17 +3353,37 @@ def run_receipt(args: argparse.Namespace) -> tuple[dict, int]:
         validation_root = validation_root_for(root, args.change)
         if validation_root not in output.parents:
             raise ValueError("receipt_path_outside_validation_root")
-        artifacts = [
-            {"path": reference, "sha256": sha256_file(logical_repo_path(root, reference, must_exist=True))}
-            for reference in args.artifact
-        ]
-    except (ValueError, FileNotFoundError) as exc:
+        for reference in args.artifact:
+            # Existence is deliberately not required here: the command below
+            # is allowed to create the artifact. Only structural path safety
+            # (repo:// scheme, no traversal, resolves inside the repository)
+            # is checked before the command runs.
+            logical_repo_path(root, reference)
+    except ValueError as exc:
         return violation_result("run-receipt", str(exc), "receipt output/artifact 路径无效")
     commit = git_output(root, "rev-parse", "HEAD")
     source_tree = git_output(root, "rev-parse", "HEAD^{tree}")
     started = now_iso()
     completed = subprocess.run(command, cwd=root, text=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     finished = now_iso()
+    try:
+        # Re-resolve after the command runs: the hash must bind the final
+        # bytes, and any path that only became unsafe once the command ran
+        # (for example a symlink the command created pointing outside the
+        # repository) must still be caught here, not just at declaration time.
+        artifacts = [
+            {"path": reference, "sha256": sha256_file(logical_repo_path(root, reference, must_exist=True))}
+            for reference in args.artifact
+        ]
+    except FileNotFoundError:
+        return violation_result(
+            "run-receipt", "artifact_missing_after_command",
+            "命令执行后声明的 artifact 仍不存在", exit_code=completed.returncode,
+        )
+    except ValueError as exc:
+        return violation_result(
+            "run-receipt", str(exc), "命令执行后声明的 artifact 路径不安全", exit_code=completed.returncode,
+        )
     receipt = {
         "schema_version": 1,
         "command": command,
@@ -3452,6 +3715,7 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
     receipts: list[dict] = []
     valid_receipts: list[dict] = []
     receipts_by_ref: dict[str, dict] = {}
+    valid_receipts_by_ref: dict[str, dict] = {}
     expected_commit = git_output(root, "rev-parse", "HEAD")
     expected_tree = git_output(root, "rev-parse", "HEAD^{tree}")
     for reference in dict.fromkeys(receipt_refs):
@@ -3470,6 +3734,7 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
             receipts_by_ref[reference] = receipt
             if not receipt_violations:
                 valid_receipts.append(receipt)
+                valid_receipts_by_ref[reference] = receipt
     if manifest_enabled and not any(receipt.get("verification_tier") == "objective_scope" for receipt in valid_receipts):
         violations.append(item("objective_scope_receipt_missing", "当前 objective 缺少有效 objective_scope receipt"))
 
@@ -3493,6 +3758,10 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         }
         if not required_types.issubset(present_types):
             violations.append(item("boundary_evidence_missing", f"matrix row 缺少 evidence type：{row.get('row_id', '?')}"))
+    if manifest_enabled and "projection" in locals():
+        violations.extend(versioned_obligation_receipt_violations(
+            root, projection, rows, valid_receipts_by_ref
+        ))
 
     try:
         events = read_events(root, collaboration)
@@ -3695,7 +3964,7 @@ def review_decision(args: argparse.Namespace) -> tuple[dict, int]:
                 ),
                 None,
             )
-            current_subject_ids = sorted(entry["subject_id"] for entry in projection["subjects"])
+            current_subject_ids = sorted({entry["subject_id"] for entry in projection["subjects"]})
             if (
                 not ready_event
                 or ready_event.get("subject_manifest") != manifest_reference

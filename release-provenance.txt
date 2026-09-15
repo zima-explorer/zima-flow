@@ -1,4 +1,4 @@
-zimaflow_version=1.22.9
-source_commit=2dbf3e8a01e105418cb5f888f7d8e93e624c2e78
+zimaflow_version=1.22.10
+source_commit=4d425688d2a7b5a53a6956b1596f3d898ad90f36
 host_capability_fingerprint=4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbdde77
 license=MIT

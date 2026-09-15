@@ -1,12 +1,12 @@
 schema_version: 2
-zimaflow_version: 1.22.9
-source_commit: 2dbf3e8a01e105418cb5f888f7d8e93e624c2e78
+zimaflow_version: 1.22.10
+source_commit: 4d425688d2a7b5a53a6956b1596f3d898ad90f36
 host_capability_fingerprint: 4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbdde77
-build_id: zimaflow-1.22.9-2dbf3e8a01e105418cb5f888f7d8e93e624c2e78
+build_id: zimaflow-1.22.10-4d425688d2a7b5a53a6956b1596f3d898ad90f36
 reproducible_build: true
 promotion: immutable_tested_bundle
 license: MIT
-payload_sha256: 5ef2db527608cb1ff19efceab910b990e92539f5ecca75b039ebf8bab46c2a4f
+payload_sha256: 7b9471fe78a4e97f640b1806b537a1fb334316afab7436e7b54c4ae7c3f1bbd7
 ownership:
   source: private_zimaflow_repository
   release_bundle: generated_from_shared_source
@@ -39,13 +39,13 @@ forbidden_path_globs:
 artifacts:
   claude:
     path: plugins/claude
-    sha256: adf88b22232d9edf98596c58122149ce88a2d1721311b98695abc0e7ff2f4cc0
+    sha256: df6bd094bc10ccdaaf303d0f66467f5b2b0b564e32486b80fc048852d00e93c2
   codex:
     path: plugins/codex
-    sha256: 864fe15f7e1280206eef3f74f6b3a27c8ede7109f60e103c75dd4b2c385f27e8
+    sha256: 8de07b61eecd32f73d85200253f197e3f2f9aadb9fa8bf157f49ef762626c948
   workbuddy:
     path: adapters/workbuddy
-    sha256: 22ac0baa1c6150a433bc005b4b2daf824bbec8a84ca1c6fa4b252fdbf3872f56
+    sha256: 9233e5305a3e7b8fcbb84639208d8218bf66d93074c5465721d70be7358bf055
   shared_runtime:
     path: runtime/zimaflow
-    sha256: b0e0f5a22d5f77287da1f1f80e6130c579fe9ef4c79e6b28834f18575422e369
+    sha256: cde39660db75d5f8d7bf1b8734a60d34d684f1e77e642a3ecc520c5f10f11547

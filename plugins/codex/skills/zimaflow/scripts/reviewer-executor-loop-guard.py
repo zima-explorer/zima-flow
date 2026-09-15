@@ -2409,10 +2409,7 @@ def validate_brief(args: argparse.Namespace) -> tuple[dict, int]:
             except ValueError as exc:
                 violations.append(item("event_log_invalid", str(exc)))
                 events = []
-            recurrence_upgrade = any(
-                event.get("event_type") == "finding_recorded" and event.get("systemic_upgrade_required") is True
-                for event in events
-            )
+            recurrence_upgrade = bool(systemic_boundaries(events, collaboration["objective_id"]))
             goal = sections.get("本轮目标", "")
             scope = sections.get("任务范围", "")
             evidence = sections.get("交付证据", "")
@@ -3453,11 +3450,12 @@ def receipt_check(args: argparse.Namespace) -> tuple[dict, int]:
     ), 0 if not violations else 1
 
 
-def systemic_boundaries(events: list[dict]) -> set[str]:
+def systemic_boundaries(events: list[dict], objective_id: str | None = None) -> set[str]:
     return {
         str(event.get("boundary_id"))
         for event in events
         if event.get("event_type") == "finding_recorded" and event.get("systemic_upgrade_required") is True
+        and (objective_id is None or event.get("objective_id") == objective_id)
     }
 
 
@@ -3769,7 +3767,7 @@ def review_ready(args: argparse.Namespace) -> tuple[dict, int]:
         violations.append(item("event_log_invalid", str(exc)))
         events = []
     violations.extend(authorization_current_violations(root, events, collaboration["objective_id"]))
-    for boundary in systemic_boundaries(events):
+    for boundary in systemic_boundaries(events, collaboration["objective_id"]):
         boundary_rows = [row for row in rows if row.get("boundary_id") == boundary]
         if not boundary_rows or any(row.get("status") != "covered" for row in boundary_rows):
             violations.append(item("recurrence_upgrade_unresolved", f"复发边界尚未证明系统性闭合：{boundary}"))

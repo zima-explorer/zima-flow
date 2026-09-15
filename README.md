@@ -30,27 +30,21 @@ Zimaflow is not an AI coding agent, a project-management system, or a copy of
 your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
 give their coding capabilities a reliable engineering process.
 
-## What's new in 1.22.9
+## What's new in 1.22.10
 
-Zimaflow 1.22.9 makes remediation evidence reliable when sequential
-Reviewer–Executor objectives freeze different verification contracts for the
-same stable subject:
+Zimaflow 1.22.10 adds a repeatable, verifiable path from a clean source
+revision to a public release:
 
-- A remediation manifest can carry deterministic, full-content obligation versions
-  keyed by their source objectives. Historical contracts remain append-only instead
-  of being overwritten or reduced to caller-supplied digest claims.
-- Semantic coverage and receipt provenance are verified for every carried version.
-  Evidence may be shared only where each version's verification contract authorizes
-  its host, working directory, isolation, and required evidence type.
-- Whole-change and release gates recompute the complete effective version set. An
-  omitted generation, broadened permission, mismatched artifact hash, or unsupported
-  shape fails closed before acceptance.
-- The feature remains opt-in. Flat v1, namespaced v2, no-manifest, and ordinary
-  single-agent paths retain legacy byte and behavior compatibility when obligation
-  versions are absent.
-
-The workflow remains opt-in. The default single-agent path stays lightweight,
-and existing flat-specification evidence keeps its previous identity.
+- `zimaflow release prepare` creates a verified release candidate, runs the
+  committed source checks, and records the evidence needed to inspect that
+  candidate later.
+- The candidate is built twice. Matching builds become one unchanged bundle,
+  so the published distribution is the exact artifact that passed verification.
+- `zimaflow release status` validates a saved receipt and bundle without
+  rebuilding, making it clear whether evidence is reusable or a new candidate
+  is required.
+- Publishing remains explicit and reviewable. The public distribution contains
+  only the verified runtime and release material needed by users.
 
 ## How it works
 
@@ -83,7 +77,7 @@ every task into a compliance ceremony.
 ## Quick start
 
 Install the CLI for the host you use before adding Zimaflow. This checkout
-contains Zimaflow 1.22.9.
+contains Zimaflow 1.22.10.
 
 Claude Code:
 
@@ -177,7 +171,7 @@ changes. For this release:
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.9
+git checkout v1.22.10
 ./verify-release.sh --distribution .
 ```
 

@@ -21,16 +21,14 @@ AI Coding 让实现变快，但需求边界、关键决策、验证结果和上�
 
 Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工作区的镜像。它与 Claude Code、Codex 和 WorkBuddy 配合，为已有的编码能力补上一条可靠的工程流程。
 
-## 1.22.9 有什么更新
+## 1.22.10 有什么更新
 
-Zimaflow 1.22.9 让顺序 Reviewer–Executor objectives 为同一个稳定 subject 冻结了不同验证合同时，remediation 证据仍然可靠：
+Zimaflow 1.22.10 增加了一条从干净 source revision 到公开发布的可复核路径：
 
-- remediation manifest 可以按来源 objective 携带确定性的完整义务版本；历史合同继续 append-only，不会被改写，也不会退化为调用方提供的 digest 声明。
-- 每一代义务版本都单独校验语义覆盖与 receipt 来源。只有当各代 verification contract 都允许对应 host、工作目录、隔离方式和证据类型时，证据才能复用。
-- whole-change 与 release gate 会重算完整的有效版本集合；遗漏任一代、放宽权限、artifact hash 不匹配或结构不受支持都会 fail closed。
-- 该能力仍为显式启用项；没有义务版本时，flat v1、namespaced v2、no-manifest 与普通单 Agent 路径继续保持旧版字节和行为兼容。
-
-该协作模式仍然是显式启用项。默认单 Agent 路径继续保持轻量，既有 flat 规范证据也保持原有身份。
+- `zimaflow release prepare` 会生成已验证的发布候选，运行已提交的 source checks，并记录后续核验该候选所需的证据。
+- 候选会独立构建两次；一致的构建结果成为同一份不可变的公开包，确保它就是通过核验的那一份字节。
+- `zimaflow release status` 不重新构建，只校验已保存的 receipt 与 bundle，明确显示证据可否复用、是否需要新候选。
+- 发布动作仍需明确授权并可供复核；公开分发内容只包含用户使用所需、已验证的 runtime 与 release material。
 
 ## 工作流如何运转
 
@@ -52,7 +50,7 @@ Zimaflow 会先按改动规模选择合适的流程档位：
 
 ## 快速开始
 
-先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.9。
+先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.10。
 
 Claude Code：
 
@@ -124,7 +122,7 @@ release manifest 用于验证不可变发行 payload。请 checkout 要验证的
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.9
+git checkout v1.22.10
 ./verify-release.sh --distribution .
 ```
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.9"
+VERSION="1.22.10"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -20,6 +20,8 @@ Usage:
   zimaflow recall --project <name> [--json] [--days N] [--summary-lines N]
   zimaflow recall --all [--json] [--days N] [--summary-lines N]
   zimaflow release-check [--json]
+  zimaflow release prepare --version VERSION --source-commit COMMIT --public-repository OWNER/REPO --output-parent ABSOLUTE_EXISTING_PARENT --json
+  zimaflow release status --receipt ABSOLUTE_RECEIPT [--bundle ABSOLUTE_BUNDLE] --json
   zimaflow context-check [--json]
   zimaflow stale-review [--json] [--days N] [--include-rules]
   zimaflow knowledge-record --knowledge-id ID --event-type TYPE [options]
@@ -56,6 +58,8 @@ Commands:
                         ZIMAFLOW_PROJECT_REGISTRY explicitly enables legacy Markdown input.
   release-check         Pre-release readiness checklist + 4 human-confirm questions.
   release-check --json  Emit the release readiness summary as JSON.
+  release               Prepare/status release evidence.
+                        Release prepare/status are available only from a private source checkout.
   context-check         Check thin context-index baseline/workflow references.
   context-check --json  Emit the context-index check as JSON.
   stale-review          List knowledge entries with no recent cited/applied usage.
@@ -4587,6 +4591,22 @@ run_install_hooks() {
   fi
 }
 
+run_release() {
+  local helper="$ZIMAFLOW_BIN_DIR/../scripts/release-pipeline.py"
+  local argument
+  if [ ! -f "$helper" ]; then
+    for argument in "$@"; do
+      if [ "$argument" = "--json" ]; then
+        printf '%s\n' '{"status":"invalid","reasons":["release_tooling_unavailable"],"next_action":"use_private_source_checkout"}'
+        return 2
+      fi
+    done
+    echo "Release tooling is available only from the private source checkout." >&2
+    return 2
+  fi
+  python3 "$helper" "$@"
+}
+
 main() {
   case "${1:-}" in
     close)
@@ -4634,6 +4654,9 @@ main() {
       else
         run_release_check human
       fi
+      ;;
+    release)
+      run_release "${@:2}"
       ;;
     context-check)
       if [ "${2:-}" = "--json" ]; then

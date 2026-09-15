@@ -212,6 +212,7 @@ cat openspec/changes/<name>/.zimaflow-state.yaml
 - 若 `collaboration.profile=reviewer_executor`：objective/round 是否明确，phase 是否由合法 lifecycle 推进，state `event_head` 是否与 event chain / `state_after` / 顶层 `updated_at` 一致，`loop_events` / `boundary_matrix` / `latest_report` / `latest_receipts` 指针是否可解析且与当前 round 一致
 - opt-in objective 是否已 `accepted`，或是否存在带用户证据的显式 termination；checkpoint、review_ready、changes_requested、普通测试失败或实现困难都不能当作收口完成
 - 若同时存在 `objective_plan` / `subject_manifest`：不得只统计历史 accepted。运行 deterministic whole-Change/release coverage gate，从当前真源重算所有 required objectives 的 `accepted_current`；核对全部 `required_task_ids` 完整、唯一归属且完成，全部 delta-spec/composition/recurrence/current evidence 闭合，并只消费本门有效的 `whole_change` / `release` receipts。stale predecessor 只能由 current/new remediation objective 完整覆盖并 accepted，不重开旧 objective lifecycle。
+- 若 archive/spec sync 曾让 predecessor proof stale：核对 remediation 完整携带 frozen obligation，current semantic inputs 使用 archive-stable delta spec/实现/测试输入，且隔离归档前后 ordered digest/coverage 证据一致；不得用 `--skip-specs`、伪造 `docs_synced`、rebaseline 或忽略 stale receipt 通过 close。
 
 state 缺失或明显过期时，列为 📝 建议补充；如果缺失会导致无法判断 verify/archive 状态，列为 ❌ 明确缺失。
 

@@ -1,0 +1,18 @@
+{
+  "case_id": "public-release-boundary",
+  "evaluation_mode": "mechanical",
+  "expected": {
+    "assertions": [
+      {"expected": true, "id": "public_bundle_verified"},
+      {"expected": true, "id": "sensitive_filter_verified"},
+      {"expected": false, "id": "publication_claimed"}
+    ]
+  },
+  "fixture": {"inputs": ["scenario.json"], "root": "fixtures/public-release-boundary"},
+  "prohibited_outcomes": ["bundle_validation_mistaken_for_publication"],
+  "required_evidence": ["containment", "artifact:artifacts/result.json"],
+  "schema_version": 1,
+  "tags": ["release", "public", "evidence", "packaging"],
+  "task": "Verify that public bundle validation, sensitive-content filtering, and actual publication evidence remain separate facts.",
+  "title": "Public release evidence stays separated"
+}

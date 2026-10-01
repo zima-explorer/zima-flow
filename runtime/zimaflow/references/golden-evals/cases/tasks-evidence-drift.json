@@ -1,0 +1,17 @@
+{
+  "case_id": "tasks-evidence-drift",
+  "evaluation_mode": "mechanical",
+  "expected": {
+    "assertions": [
+      {"expected": true, "id": "drift_detected"},
+      {"expected": true, "id": "completion_claim_blocked"}
+    ]
+  },
+  "fixture": {"inputs": ["scenario.json"], "root": "fixtures/tasks-evidence-drift"},
+  "prohibited_outcomes": ["task_marked_complete_without_matching_evidence"],
+  "required_evidence": ["containment", "artifact:artifacts/result.json"],
+  "schema_version": 1,
+  "tags": ["openspec", "tasks", "evidence"],
+  "task": "Verify that a task whose declared evidence no longer matches its implementation cannot be marked complete.",
+  "title": "Task and evidence drift blocks completion"
+}

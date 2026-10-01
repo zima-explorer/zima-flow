@@ -24,6 +24,8 @@ Brief/Report 必须引用项目真源入口，不复制 OpenSpec、Design、Deci
 
 审核未通过时描述“尚未满足的系统目标、边界和证据”，不输出逐函数、逐文件、逐问题的小补丁清单。
 
+高风险改动的语义审核可参考 `spec-compliance-check` Step 4.8 的人类接手检查：负责接手的人复述设计理由、主要失败路径和事故时的检查/回退责任。Codex 等 Agent 可以核对证据、指出盲区并整理待回答问题，但它自己的解释或 `accepted` 事件不能证明用户已经理解系统。这是试行的软检查，不增加 Brief/Report 标题、机器门、状态字段或新的 reviewer decision 类型。
+
 每个 opt-in Change 以 `change_id + objective_id` 为稳定 review scope。一个 Change 可以声明 2–3 个顺序 objective，以多次正式审核完成同一产品结果；每个 objective 仍只使用一次现有 `planned → executing ↔ checkpoint → review_ready → accepted` 生命周期和一个 reviewer decision。首次只能启动 `order=1`，已有 accepted objective 后只能启动其直接后继；两种跳序均以 `objective_sequence_invalid` 在写 state/event 前拒绝。`round` 只表示该 objective 在 `changes_requested` 后的返修尝试，task group 与 receipt batch 只用于组织，不拥有 phase、round 或 decision。`checkpoint` 只属于执行者内部，不触发审核或对外 Report；`review_ready` 只能由任务级机器门产生；`accepted` 只由 reviewer/用户决定。
 
 顺序 objective 默认按强相关纵向闭环拆分，例如 A 主路径、B 相邻/异常路径、C 三宿主或负向路径；系统性 boundary/recurrence closure 与 release readiness 默认仍属于全 Change 门。3–6 tasks 只是建议，不是限制。每个 required objective 必须显式列出 `required_task_ids`：`tasks.md` 的 required tasks 必须完整、唯一归属，不得遗漏、重复或静默换组；当前 objective 只检查自己的 task 完成状态，后续 objective 的未完成 task 不阻塞它，whole-Change closure 才检查全部 required tasks 已唯一覆盖并完成。

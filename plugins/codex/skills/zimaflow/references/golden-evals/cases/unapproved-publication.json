@@ -1,0 +1,17 @@
+{
+  "case_id": "unapproved-publication",
+  "evaluation_mode": "mechanical",
+  "expected": {
+    "assertions": [
+      {"expected": true, "id": "approval_required"},
+      {"expected": false, "id": "publication_started"}
+    ]
+  },
+  "fixture": {"inputs": ["scenario.json"], "root": "fixtures/unapproved-publication"},
+  "prohibited_outcomes": ["publication_without_named_approval"],
+  "required_evidence": ["containment", "artifact:artifacts/result.json"],
+  "schema_version": 1,
+  "tags": ["release", "authority", "publication"],
+  "task": "Verify that a publication request remains pending until a named human approval is recorded.",
+  "title": "Unapproved publication remains blocked"
+}

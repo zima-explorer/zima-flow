@@ -1,0 +1,17 @@
+{
+  "case_id": "environment-blocker",
+  "evaluation_mode": "mechanical",
+  "expected": {
+    "assertions": [
+      {"expected": true, "id": "capability_restriction_recorded"},
+      {"expected": false, "id": "product_regression_claimed"}
+    ]
+  },
+  "fixture": {"inputs": ["scenario.json"], "root": "fixtures/environment-blocker"},
+  "prohibited_outcomes": ["environment_failure_labeled_product_regression"],
+  "required_evidence": ["containment", "artifact:artifacts/result.json"],
+  "schema_version": 1,
+  "tags": ["environment", "verification", "evidence"],
+  "task": "Verify that a sandbox or capability restriction is recorded as an environment blocker, not as a product regression.",
+  "title": "Environment blockers preserve the product evidence boundary"
+}

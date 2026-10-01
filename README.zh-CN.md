@@ -21,14 +21,14 @@ AI Coding 让实现变快，但需求边界、关键决策、验证结果和上�
 
 Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工作区的镜像。它与 Claude Code、Codex 和 WorkBuddy 配合，为已有的编码能力补上一条可靠的工程流程。
 
-## 1.22.10 有什么更新
+## 1.22.11 有什么更新
 
-Zimaflow 1.22.10 增加了一条从干净 source revision 到公开发布的可复核路径：
+Zimaflow 1.22.11 为 AI 辅助开发补充了几项聚焦检查：
 
-- `zimaflow release prepare` 会生成已验证的发布候选，运行已提交的 source checks，并记录后续核验该候选所需的证据。
-- 候选会独立构建两次；一致的构建结果成为同一份不可变的公开包，确保它就是通过核验的那一份字节。
-- `zimaflow release status` 不重新构建，只校验已保存的 receipt 与 bundle，明确显示证据可否复用、是否需要新候选。
-- 发布动作仍需明确授权并可供复核；公开分发内容只包含用户使用所需、已验证的 runtime 与 release material。
+- Golden-case Eval 通过版本化案例和本地证据检查选定的流程边界；证据不足的 `inconclusive` 不算通过。
+- 原型评审记录受影响的页面和状态，修改前保留旧稿，并区分 AI 预检、实际走查和人工最终验收。
+- 高风险实现审核提示人类接手者解释设计理由、可能的失败路径和最先采取的恢复动作；Agent 报告或测试通过不能代替人的理解。
+- 已归档 change 的 state 可按唯一 change ID 更新，便于完成归档后的收口步骤。
 
 ## 工作流如何运转
 
@@ -50,7 +50,7 @@ Zimaflow 会先按改动规模选择合适的流程档位：
 
 ## 快速开始
 
-先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.10。
+先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.11。
 
 Claude Code：
 
@@ -122,7 +122,7 @@ release manifest 用于验证不可变发行 payload。请 checkout 要验证的
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.10
+git checkout v1.22.11
 ./verify-release.sh --distribution .
 ```
 

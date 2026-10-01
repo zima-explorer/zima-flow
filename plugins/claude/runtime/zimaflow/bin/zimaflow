@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.10"
+VERSION="1.22.11"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -27,6 +27,9 @@ Usage:
   zimaflow knowledge-record --knowledge-id ID --event-type TYPE [options]
   zimaflow drift-check <change> [--json] [--write]
   zimaflow execution-input <change> --write [--json]
+  zimaflow eval brief --case FILE [--root DIR] [--json]
+  zimaflow eval validate-case --file FILE --json [--root DIR]
+  zimaflow eval check --case FILE --receipt FILE --json [--root DIR]
   zimaflow reviewer-executor validate-brief|validate-report|parity|handover-decision [options]
   zimaflow reviewer-executor subject-digest|start|transition|resume|record-finding|run-receipt [options]
   zimaflow reviewer-executor receipt-check|coverage-check|mark-implemented|review-ready|review-decision [options]
@@ -68,6 +71,7 @@ Commands:
   drift-check <change>  Compare artifact hashes stored in .zimaflow-state.yaml.
   drift-check --write   Write or refresh artifact hash baselines.
   execution-input       Write a derived implementation-input snapshot for a full/hotfix change.
+  eval                  Validate local Golden-case Eval cases and evidence without model APIs.
   reviewer-executor     Validate communication and manage an opt-in objective/evidence lifecycle.
   host-profile          Report host discovery and packaging capabilities.
   doctor                Read-only host capability diagnostic with resumable intent.
@@ -3098,8 +3102,18 @@ run_state_write() {
   file="$(state_path_for_change "$root" "$change")"
 
   if [ "$command" = "update" ] && [ ! -f "$file" ]; then
-    echo "State file not found: $file"
-    return 2
+    local archived_matches archived_match_count
+    archived_matches="$(archived_state_matches "$root" "$change")"
+    archived_match_count="$(printf '%s\n' "$archived_matches" | awk 'NF { count++ } END { print count + 0 }')"
+    if [ "$archived_match_count" = "1" ]; then
+      file="$archived_matches"
+    elif [ "$archived_match_count" -gt 1 ]; then
+      echo "Archived state is ambiguous for change: $change"
+      return 2
+    else
+      echo "State file not found: $file"
+      return 2
+    fi
   fi
 
   state_load_or_defaults "$file" "$change"
@@ -4607,6 +4621,15 @@ run_release() {
   python3 "$helper" "$@"
 }
 
+run_eval() {
+  local helper="$ZIMAFLOW_BIN_DIR/../scripts/golden-eval.py"
+  if [ ! -f "$helper" ]; then
+    echo "Golden Eval tooling is unavailable in this runtime." >&2
+    return 2
+  fi
+  python3 "$helper" "$@"
+}
+
 main() {
   case "${1:-}" in
     close)
@@ -4680,6 +4703,9 @@ main() {
       ;;
     execution-input)
       run_execution_input "${2:-}" "${@:3}"
+      ;;
+    eval)
+      run_eval "${@:2}"
       ;;
     reviewer-executor)
       run_reviewer_executor "${@:2}"

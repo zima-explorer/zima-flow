@@ -293,6 +293,15 @@ Gate 豁免：**quick 档**（口头确认即可）、**问题排障**（根因�
 - **问题排障** → `superpowers:systematic-debugging`，传问题现象、已知错误、复现线索；根因确认后回本 skill 二次定档
 - **紧急热修复** → 直接进 Superpowers 修复，完成后触发 `handover-manager` 补记录
 
+### Step 7.25：Golden-case Eval（按需，不是默认 Gate）
+
+当用户明确要求“检查这次 Skill / 规则 / 模型策略 / 宿主打包是否回归”，或变更命中了已有高风险边界时，才启用 Golden-case Eval；普通开发任务**默认不运行**。
+
+1. 从 `<zimaflow-root>/references/golden-evals/cases/` 选择与风险标签匹配的 Case，先运行 `zimaflow eval brief --case <case-file>`，向执行者展示任务、夹具边界、禁止结果和所需证据。
+2. 仅在 Case 声明的隔离夹具中执行；宿主 Agent 或人工完成操作，再提供不含秘密和完整转录的 Receipt。不得因此调用模型 API、读取凭证、访问生产、执行外部写入、真实安装或发布。
+3. 运行 `zimaflow eval check --case <case-file> --receipt <receipt-file> --json`。向用户汇报紧凑的 `passed / failed / inconclusive` 计数、Case ID 与证据引用；没有 containment / execution proof 时只能是 `inconclusive`。
+4. `semantic_review_required` Case 缺少独立批准也必须报 `inconclusive`；Eval 成功只证明该 Case 的证据完整，**不**改变 Change 状态，也不授权合并、发布或生产操作。
+
 ### Step 7.5：委派 Execution Brief
 
 当且仅当任务要交给 Claude Code、Codex 新 Session、WorkBuddy 或其他开发 Agent 执行时，读取 `<zimaflow-root>/references/Reviewer-Executor-Loop.md`，在 quick / standard / full 定档后按 Reviewer–Executor Loop Contract 输出简短 Execution Brief。

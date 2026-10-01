@@ -1,0 +1,17 @@
+{
+  "case_id": "lifecycle-fact-separation",
+  "evaluation_mode": "mechanical",
+  "expected": {
+    "assertions": [
+      {"expected": true, "id": "historical_archive_is_not_active_work"},
+      {"expected": true, "id": "current_session_change_remains_visible"}
+    ]
+  },
+  "fixture": {"inputs": ["scenario.json"], "root": "fixtures/lifecycle-fact-separation"},
+  "prohibited_outcomes": ["historical_fact_rewritten_as_current_state"],
+  "required_evidence": ["containment", "artifact:artifacts/result.json"],
+  "schema_version": 1,
+  "tags": ["lifecycle", "facts", "state"],
+  "task": "Verify that historical archive facts stay auditable without being confused with current session work.",
+  "title": "Lifecycle facts remain separated"
+}

@@ -13,7 +13,7 @@
 | 产品功能改动（业务逻辑代码） | 项目 `PROGRESS.md` | 必须 | 记录功能状态变化：新增/修改/完成 |
 | 产品定位或范围变化 | `Decisions/` 决策文档 | 必须 | 记录"为什么变、变成什么、影响范围" |
 | 产品定位或范围变化 | 项目 PRD（如有） | 建议 | 回溯更新受影响的需求描述 |
-| 产品原型评审产物新增/变更 | 项目 `Prototypes/` 下的 `prototype.html` + `review-notes.md` | 必须 | 保留可评审页面、状态、旁注、AI 假设和待确认问题 |
+| 产品原型评审产物新增/变更 | 项目 `Prototypes/` 下的 `prototype.html` + `review-notes.md` | 必须 | 保留可评审页面、状态、旁注、AI 假设和待确认问题；多页原型还须同步页面/状态—跳转清单、变更影响与复验及交付验收记录 |
 | 产品原型评审完成 | OpenSpec `proposal.md` 或 `design.md` | 必须 | 引用原型和评审说明，确保评审结论进入可执行 spec |
 | 产品原型评审完成 | `Decisions/` 决策文档 | 建议 | 如原型评审改变 first slice、范围或 Non-goals，需回写路线决策 |
 | OpenSpec 路线/切片调整 | `Decisions/` 决策文档 | 必须 | 先更新决策文档，再调整 openspec/changes/ |

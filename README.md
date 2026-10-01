@@ -30,21 +30,19 @@ Zimaflow is not an AI coding agent, a project-management system, or a copy of
 your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
 give their coding capabilities a reliable engineering process.
 
-## What's new in 1.22.10
+## What's new in 1.22.11
 
-Zimaflow 1.22.10 adds a repeatable, verifiable path from a clean source
-revision to a public release:
+Zimaflow 1.22.11 adds focused checks for AI-assisted changes:
 
-- `zimaflow release prepare` creates a verified release candidate, runs the
-  committed source checks, and records the evidence needed to inspect that
-  candidate later.
-- The candidate is built twice. Matching builds become one unchanged bundle,
-  so the published distribution is the exact artifact that passed verification.
-- `zimaflow release status` validates a saved receipt and bundle without
-  rebuilding, making it clear whether evidence is reusable or a new candidate
-  is required.
-- Publishing remains explicit and reviewable. The public distribution contains
-  only the verified runtime and release material needed by users.
+- Golden-case Evals let a host check selected workflow boundaries against
+  versioned cases and local evidence. An inconclusive result is never a pass.
+- Prototype review tracks affected pages and states, preserves earlier work
+  before edits, and separates AI prechecks from actual use and human acceptance.
+- High-risk implementation reviews now prompt a human maintainer to explain
+  the design, likely failure path, and first recovery step. Agent reports and
+  passing tests cannot claim that a person understands the system.
+- Archived change state can be updated by its unique change ID, so the
+  documented archive-to-close sequence remains usable.
 
 ## How it works
 
@@ -77,7 +75,7 @@ every task into a compliance ceremony.
 ## Quick start
 
 Install the CLI for the host you use before adding Zimaflow. This checkout
-contains Zimaflow 1.22.10.
+contains Zimaflow 1.22.11.
 
 Claude Code:
 
@@ -171,7 +169,7 @@ changes. For this release:
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.10
+git checkout v1.22.11
 ./verify-release.sh --distribution .
 ```
 

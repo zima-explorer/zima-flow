@@ -214,7 +214,7 @@ catalog 是单一真源，用来统一规则 ID、触发条件和报告措辞；
 3. 若 profile 已启用，先确认 executor 已通过 `review-ready` gate；checkpoint 或普通测试失败不能触发 reviewer decision。no-manifest path 保持现有 delta-spec、精确 diff、Report、commit/source-tree receipts、evidence-only dirty set 与 event/state history 门。manifest path 必须只检查 current objective 的 `required_task_ids`、canonical subject mapping、accepted-current predecessors 与有效 `objective_scope` receipts；后续 objective 的未完成 tasks 不阻塞当前 scope，`checkpoint_targeted` receipt 不能满足审核。task 文本/归属等 semantic input 变化必须使旧 receipt 失效，metadata-only 与跨 round 同 digest receipt 可复用。复发 boundary 必须由 guard 汇总相关 matrix/current evidence，`systemic_closure` 自报布尔值不构成证据。以当前 objective、round、manifest、boundary matrix、structured receipts、Execution Report 和项目真源做语义审核。
    - archive 前的 remediation 还要核对 predecessor frozen obligation 完整、current semantic inputs 不包含会被 OpenSpec 主 spec sync 改写的输入，并以隔离归档前后 digest/coverage 证据证明稳定；不得接受 skip-specs、rebaseline 或忽略 stale receipt。
 4. 对每个有效 finding 运行 `record-finding`，使用稳定 `defect-class`、`boundary`、`requirement` ID；不得填写 recurrence count。feedback 只描述 objective / requirement / boundary / invariant / evidence gap，不给逐函数、逐文件或顺序补丁指令。
-5. 审核未通过时，把结构化 feedback 落在当前仓 validation 目录并运行 `review-decision --decision changes-requested --feedback <path>`；CLI 自动开启下一 round。以本次 Spec Compliance Report 和项目真源为证据，输出下一轮 objective-level Execution Brief。
+5. 按 canonical contract 的“审核复盘”核对当前 objective 的正式审核轮次；第三轮及以后仍未通过时，先在现有 Spec Compliance Report 正文列表中完成范围、设计与验收复盘，再发起下一轮。测试重跑和 checkpoint 不计轮次；复盘不新增机器门，不因轮数或普通失败改为 blocked，也不重复索取既有有效授权。审核未通过时，把结构化 feedback 落在当前仓 validation 目录并运行 `review-decision --decision changes-requested --feedback <path>`；CLI 自动开启下一 round。以本次 Spec Compliance Report 和项目真源为证据，输出下一轮 objective-level Execution Brief。
 6. `本轮目标` 描述尚未满足的系统目标、边界或证据；同类缺陷连续出现两次、组合场景失败或本轮推翻安全/架构假设时，升级为完整边界审计、根因治理或结构性重构，并在硬约束中禁止继续点补丁。
 7. 运行 `zimaflow reviewer-executor validate-brief`，显式传入已核实的 `--code-root` / `--docs-root` 和 `--change`，并用可重复的 `--source-file` 传入本轮实际引用的 Spec Compliance Report 和全部项目真源文件；面向多个宿主时运行 `parity`。不得用占位文件绕过正文复制检查。
 
@@ -223,6 +223,8 @@ catalog 是单一真源，用来统一规则 ID、触发条件和报告措辞；
 正常审核往返只使用 state/event/matrix/receipt + Execution Brief / Execution Report，不自动创建 Handover。只有任务中断、长期暂停、用户明确要求，或执行者更换且项目真源不足以恢复时，才交给 `handover-manager`。
 
 如果审查发现的是规范缺失、范围/权限扩大、不可逆操作或未裁决产品决策，仍按本 Skill 既有规则停止并交用户，不伪装成可自主修复 Brief。
+
+存在真实待批准事项时，按 `references/Reviewer-Executor-Loop.md` 的“决策请求格式”组织现有 Execution Report 的“待用户批准事项”：给出具体决定、已完成与依据、可选方案、推荐理由、影响边界、决定后动作和当前任务/阻断关联。无待批准事项写“无”。保持六个 Report 区块及现有 lifecycle/授权恢复协议；引用已存在的 blocked event 和 `required_decision`，不把推荐、沉默或执行者自填身份当作批准，也不为展示请求手写 phase 或新建审批状态。
 
 ### Step 5.5：报告落盘要求
 

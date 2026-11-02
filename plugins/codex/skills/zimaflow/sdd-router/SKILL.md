@@ -313,6 +313,7 @@ Gate 豁免：**quick 档**（口头确认即可）、**问题排障**（根因�
 - manifest plan 的默认 2–3 个 objective 必须是同一产品结果的强相关纵向闭环（如主路径、相邻/异常路径、三宿主/负向路径），而不是 task 批次。每个 required objective 显式列出 `required_task_ids`，全部 required tasks 完整且唯一归属；systemic closure、recurrence 与 release 默认保留为 whole-Change gate。每个 objective 仍只使用现有 lifecycle 和一个 reviewer decision，round 只表示返修。
 - 同类缺陷连续出现两次、组合场景失败，或安全/架构假设失效时，目标升级为完整边界审计、根因治理或结构性重构，禁止逐函数点补丁。复发次数只能从 `record-finding` 的 append-only events 派生，不接受人工计数。
 - 升级后的 Brief 只声明边界闭合目标与所需 evidence，不要求 Executor 自报 `systemic_closure`。`review-ready` 由 guard 从同一复发 boundary 的全部相关 matrix 行及有效 evidence 派生；任一相关行仍为 `open` 就必须失败。
+- 在 Brief 现有“硬约束 / 交付证据”中引用 canonical contract 的“审核复盘”和“决策请求格式”：显式 profile 的同一 objective 第三轮及以后正式审核仍未通过时，由审核者先复盘再返修；真实待批准事项在 Report 原有区块中按格式呈现。普通工程失败继续在范围内修复，不因复盘新增阻断、重复审批或自动启用 profile。
 - 生成后运行 `zimaflow reviewer-executor validate-brief`，显式传入已核实的 `--code-root` / `--docs-root`，并用可重复的 `--source-file` 传入本轮实际引用的每个 requirement、Decision、OpenSpec、state 或 Handover 文件；同时面向三宿主时再运行 `parity`。不得用占位文件绕过正文复制检查。Brief 自检失败应在当前权限内修正，不触发 Handover。
 
 full 档若本轮 `Decisions/` 已存在且用户确认沿用，可跳过重写，直接把路径传给 `task-planning`。

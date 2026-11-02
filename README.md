@@ -30,19 +30,22 @@ Zimaflow is not an AI coding agent, a project-management system, or a copy of
 your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
 give their coding capabilities a reliable engineering process.
 
-## What's new in 1.22.11
+## What's new in 1.22.12
 
-Zimaflow 1.22.11 adds focused checks for AI-assisted changes:
+Zimaflow 1.22.12 clarifies reviewer–executor handoffs:
 
-- Golden-case Evals let a host check selected workflow boundaries against
-  versioned cases and local evidence. An inconclusive result is never a pass.
-- Prototype review tracks affected pages and states, preserves earlier work
-  before edits, and separates AI prechecks from actual use and human acceptance.
-- High-risk implementation reviews now prompt a human maintainer to explain
-  the design, likely failure path, and first recovery step. Agent reports and
-  passing tests cannot claim that a person understands the system.
-- Archived change state can be updated by its unique change ID, so the
-  documented archive-to-close sequence remains usable.
+- After the third formal review of the same objective remains unsuccessful,
+  the reviewer revisits scope, design, and acceptance before another rework
+  round. Test retries and checkpoints do not count as review rounds.
+- Seven-part decision requests fit inside the existing six-section execution
+  report, with evidence, options, a recommendation, impact, and next actions.
+- Valid authorizations that cover the current action remain usable across
+  rework rounds. True blockers still use the existing bound approval and
+  resume protocol.
+- These are workflow instructions, with no new CLI behavior, state fields,
+  scheduling service, or deployment authority.
+
+Earlier releases also include Golden-case Evals, prototype review with human acceptance, and high-risk handoff prompts for a human maintainer.
 
 ## How it works
 
@@ -75,7 +78,7 @@ every task into a compliance ceremony.
 ## Quick start
 
 Install the CLI for the host you use before adding Zimaflow. This checkout
-contains Zimaflow 1.22.11.
+contains Zimaflow 1.22.12.
 
 Claude Code:
 
@@ -169,7 +172,7 @@ changes. For this release:
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.11
+git checkout v1.22.12
 ./verify-release.sh --distribution .
 ```
 

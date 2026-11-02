@@ -4,4 +4,4 @@ source_fingerprint: 4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbd
 host_id: workbuddy
 packaging_mode: direct_source
 shared_runtime_path: ../../runtime/zimaflow
-shared_runtime_sha256: 34125edb916ec9ef12d453b68e3626cc3c2ddb2e601af74a11c6e9c866da4d75
+shared_runtime_sha256: 14e4d0d7bd113d0e8c201094f201abaf737ac27ef91c7252173f15c8a7f871b0

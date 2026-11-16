@@ -21,16 +21,16 @@ AI Coding 让实现变快，但需求边界、关键决策、验证结果和上�
 
 Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工作区的镜像。它与 Claude Code、Codex 和 WorkBuddy 配合，为已有的编码能力补上一条可靠的工程流程。
 
-## 1.22.12 有什么更新
+## 1.22.13 有什么更新
 
-Zimaflow 1.22.12 明确审核者与执行者之间的协作规则：
+Zimaflow 1.22.13 新增一等 Trae 项目包与安全的旧状态迁移：
 
-- 同一 objective 第三轮正式审核及以后仍未通过时，审核者先复盘范围、设计和验收条件，再进入下一轮返修；测试重跑和 checkpoint 不计审核轮次。
-- 七项决策请求放进现有六区块执行报告，说明依据、选项、推荐、影响及决定后的动作，并保留验证命令和证据引用。
-- 已有效覆盖当前动作的授权可跨返修轮次沿用；真实阻断仍通过既有绑定批准与 resume 协议恢复。
-- 本次是流程指引更新，不增加 CLI 行为、状态字段、调度服务或发布权限。
+- Trae 项目包将常驻规则与按需 Skills 分开，保留项目已有的 AGENTS.md，并输出可供复核的机器可读 host profile。
+- Doctor 会检查生成的 Trae 包、host profile、runtime 入口和规则/Skill 边界，通过后才报告 ready。
+- 旧 Specflow 状态可先审计再迁移；迁移时保留原文件、生成 SHA-256 回执，遇到歧义或冲突则 fail closed，不静默改写。
+- 公开包继续保留完整跨宿主能力，包括 state、recall、drift-check、release-check 与 session close。
 
-此前版本的 Golden-case Eval、原型评审与人工最终验收，以及高风险改动的人类接手者检查继续保留。
+此前版本的 Reviewer–Executor 复盘、Golden-case Eval、原型评审与人工最终验收，以及高风险改动的人类接手者检查继续保留。
 
 ## 工作流如何运转
 
@@ -52,7 +52,7 @@ Zimaflow 会先按改动规模选择合适的流程档位：
 
 ## 快速开始
 
-先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.12。
+先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.13。
 
 Claude Code：
 
@@ -124,7 +124,7 @@ release manifest 用于验证不可变发行 payload。请 checkout 要验证的
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.12
+git checkout v1.22.13
 ./verify-release.sh --distribution .
 ```
 

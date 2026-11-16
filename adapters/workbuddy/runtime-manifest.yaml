@@ -1,7 +1,7 @@
 schema_version: 1
 doctor_contract_schema_version: 1
-source_fingerprint: 4fb68e01f184f34f16a31b90b7fe5e45ce5adb38b82c37b9f00f1d565bbdde77
+source_fingerprint: 0558501aac466084b5c13f258c5161b4c4bfd98338d197b80325544c48bd0d4b
 host_id: workbuddy
 packaging_mode: direct_source
 shared_runtime_path: ../../runtime/zimaflow
-shared_runtime_sha256: 14e4d0d7bd113d0e8c201094f201abaf737ac27ef91c7252173f15c8a7f871b0
+shared_runtime_sha256: 6fedbb3a67268bb97f044ed2bd74352237a64783777b18bdba112fb6d42d6ee7

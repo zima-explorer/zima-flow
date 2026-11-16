@@ -30,22 +30,23 @@ Zimaflow is not an AI coding agent, a project-management system, or a copy of
 your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
 give their coding capabilities a reliable engineering process.
 
-## What's new in 1.22.12
+## What's new in 1.22.13
 
-Zimaflow 1.22.12 clarifies reviewer–executor handoffs:
+Zimaflow 1.22.13 adds first-class Trae project packaging and safe legacy-state
+migration:
 
-- After the third formal review of the same objective remains unsuccessful,
-  the reviewer revisits scope, design, and acceptance before another rework
-  round. Test retries and checkpoints do not count as review rounds.
-- Seven-part decision requests fit inside the existing six-section execution
-  report, with evidence, options, a recommendation, impact, and next actions.
-- Valid authorizations that cover the current action remain usable across
-  rework rounds. True blockers still use the existing bound approval and
-  resume protocol.
-- These are workflow instructions, with no new CLI behavior, state fields,
-  scheduling service, or deployment authority.
+- First-class Trae project packaging keeps persistent rules separate from
+  on-demand Skills, preserves an existing project AGENTS.md, and emits a
+  machine-readable host profile for review.
+- Doctor checks the generated Trae package, host profile, runtime entrypoint,
+  and rule/Skill boundaries before the package is treated as ready.
+- Legacy Specflow state can be audited before migration. Migration preserves
+  the original files, emits a SHA-256 receipt, and fails closed on ambiguous
+  or conflicting state instead of silently rewriting it.
+- The public package remains the complete cross-host distribution, including
+  state, recall, drift-check, release-check, and session-close capabilities.
 
-Earlier releases also include Golden-case Evals, prototype review with human acceptance, and high-risk handoff prompts for a human maintainer.
+Earlier releases also include reviewer–executor retrospectives, Golden-case Evals, prototype review with human acceptance, and high-risk handoff prompts for a human maintainer.
 
 ## How it works
 
@@ -78,7 +79,7 @@ every task into a compliance ceremony.
 ## Quick start
 
 Install the CLI for the host you use before adding Zimaflow. This checkout
-contains Zimaflow 1.22.12.
+contains Zimaflow 1.22.13.
 
 Claude Code:
 
@@ -172,7 +173,7 @@ changes. For this release:
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.12
+git checkout v1.22.13
 ./verify-release.sh --distribution .
 ```
 

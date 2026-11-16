@@ -1,6 +1,6 @@
 {
   "name": "zimaflow",
-  "version": "1.22.12",
+  "version": "1.22.13",
   "description": "Host-agnostic AI coding workflow guidance for Codex.",
   "author": {
     "name": "Zimaflow"

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.12"
+VERSION="1.22.13"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ZIMAFLOW_STATE_FILE_RELATIVE="${ZIMAFLOW_STATE_FILE_RELATIVE:-.zimaflow-state.yaml}"
 
 usage() {
   cat <<'EOF'
@@ -27,6 +28,8 @@ Usage:
   zimaflow knowledge-record --knowledge-id ID --event-type TYPE [options]
   zimaflow drift-check <change> [--json] [--write]
   zimaflow execution-input <change> --write [--json]
+  zimaflow legacy-state audit [--project PATH] [--json]
+  zimaflow legacy-state migrate --change CHANGE [--project PATH] [--json]
   zimaflow eval brief --case FILE [--root DIR] [--json]
   zimaflow eval validate-case --file FILE --json [--root DIR]
   zimaflow eval check --case FILE --receipt FILE --json [--root DIR]
@@ -71,6 +74,7 @@ Commands:
   drift-check <change>  Compare artifact hashes stored in .zimaflow-state.yaml.
   drift-check --write   Write or refresh artifact hash baselines.
   execution-input       Write a derived implementation-input snapshot for a full/hotfix change.
+  legacy-state          Audit or migrate legacy company Specflow state without deleting sources.
   eval                  Validate local Golden-case Eval cases and evidence without model APIs.
   reviewer-executor     Validate communication and manage an opt-in objective/evidence lifecycle.
   host-profile          Report host discovery and packaging capabilities.
@@ -107,6 +111,7 @@ Doctor options:
   --protocol-version <version>
   --runtime-manifest <path>
   --permission-status <granted|denied>
+  --persistent-activation <confirmed|missing|unknown>
 EOF
 }
 
@@ -751,13 +756,13 @@ run_host_profile() {
   shift || true
 
   case "$host" in
-    codex|workbuddy|claude-code) ;;
+    codex|workbuddy|claude-code|trae) ;;
     "")
-      echo "Missing host. Available hosts: codex, workbuddy, claude-code" >&2
+      echo "Missing host. Available hosts: codex, workbuddy, claude-code, trae" >&2
       return 2
       ;;
     *)
-      echo "Unknown host: $host. Available hosts: codex, workbuddy, claude-code" >&2
+      echo "Unknown host: $host. Available hosts: codex, workbuddy, claude-code, trae" >&2
       return 2
       ;;
   esac
@@ -784,6 +789,7 @@ run_host_profile() {
   local support_tier evidence_status discovery_mode skill_entry_layout
   local nested_project_scopes arbitrary_root_recursion symlink_entry
   local packaging_preferred packaging_fallbacks evidence_url
+  local persistent_rules context_activation context_setting_evidence
 
   schema_version="$(yaml_top_value "$profile_file" "schema_version")"
   canonical_source="$(yaml_nested_value "$profile_file" "core" "canonical_source")"
@@ -799,6 +805,9 @@ run_host_profile() {
   packaging_preferred="$(yaml_nested_value "$profile_file" "$host" "packaging_preferred")"
   packaging_fallbacks="$(yaml_nested_value "$profile_file" "$host" "packaging_fallbacks")"
   evidence_url="$(yaml_nested_value "$profile_file" "$host" "evidence_url")"
+  persistent_rules="$(yaml_nested_value "$profile_file" "$host" "persistent_rules")"
+  context_activation="$(yaml_nested_value "$profile_file" "$host" "context_activation")"
+  context_setting_evidence="$(yaml_nested_value "$profile_file" "$host" "context_setting_evidence")"
 
   if [ "$schema_version" != "1" ]; then
     echo "Unsupported host capability schema version: ${schema_version:-missing}" >&2
@@ -819,6 +828,10 @@ run_host_profile() {
     echo "Invalid host capability profile for: $host" >&2
     return 2
   fi
+  if [ "$host" = "trae" ] && { [ -z "$persistent_rules" ] || [ -z "$context_activation" ] || [ -z "$context_setting_evidence" ]; }; then
+    echo "Invalid Trae activation profile" >&2
+    return 2
+  fi
 
   if [ "$output_mode" = "json" ]; then
     printf '{'
@@ -837,6 +850,11 @@ run_host_profile() {
     printf '"preferred":'; json_string "$packaging_preferred"; printf ','
     printf '"fallbacks":'; json_csv_array "$packaging_fallbacks"
     printf '},'
+    printf '"activation":{'
+    printf '"persistent_rules":'; json_string "${persistent_rules:-not_declared}"; printf ','
+    printf '"context_activation":'; json_string "${context_activation:-not_declared}"; printf ','
+    printf '"context_setting_evidence":'; json_string "${context_setting_evidence:-not_declared}"
+    printf '},'
     printf '"core_contract":{'
     printf '"canonical_source":'; json_string "$canonical_source"; printf ','
     printf '"logical_skill_ids":'; json_bool_or_string "$logical_skill_ids"; printf ','
@@ -854,6 +872,9 @@ run_host_profile() {
   echo "Discovery mode: $discovery_mode"
   echo "Packaging preferred: $packaging_preferred"
   echo "Fallbacks: ${packaging_fallbacks:-none}"
+  echo "Persistent rules: ${persistent_rules:-not_declared}"
+  echo "Context activation: ${context_activation:-not_declared}"
+  echo "Context setting evidence: ${context_setting_evidence:-not_declared}"
   echo "Canonical source: $canonical_source"
   echo "Evidence: $evidence_url"
 }
@@ -869,6 +890,7 @@ doctor_gap_metadata() {
     runtime_drift) echo "error|true|regenerate_runtime|true" ;;
     permission_denied) echo "error|true|grant_permission|false" ;;
     contract_incompatible) echo "error|true|align_contract|true" ;;
+    persistent_activation_unverified) echo "error|true|confirm_persistent_activation|true" ;;
     *) return 2 ;;
   esac
 }
@@ -924,6 +946,7 @@ doctor_next_action() {
   if doctor_has_gap "cli_missing"; then printf 'install_cli_then_resume_intent'; return 0; fi
   if doctor_has_gap "cli_version_incompatible"; then printf 'upgrade_cli_then_resume_intent'; return 0; fi
   if doctor_has_gap "host_profile_missing"; then printf 'restore_host_profile_then_resume_intent'; return 0; fi
+  if doctor_has_gap "persistent_activation_unverified"; then printf 'confirm_persistent_activation_then_resume_intent'; return 0; fi
   if doctor_has_gap "capability_unavailable"; then printf 'make_capability_available_then_resume_intent'; return 0; fi
   if doctor_has_gap "runtime_missing"; then printf 'install_runtime_then_resume_intent'; return 0; fi
   if doctor_has_gap "runtime_drift"; then printf 'regenerate_runtime_then_resume_intent'; return 0; fi
@@ -1020,12 +1043,13 @@ run_doctor() {
   local output_mode="human" project="$(pwd)" capability="zimaflow.start"
   local cli_path="${BASH_SOURCE[0]}" cli_version="$VERSION" protocol_version="1"
   local runtime_manifest="" permission_status="granted"
+  local persistent_activation="unknown"
   DOCTOR_INTENT=""
   DOCTOR_DISPATCH_CONTEXT=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --json) output_mode="json"; shift ;;
-      --project|--capability|--intent|--dispatch-context|--cli-path|--cli-version|--protocol-version|--runtime-manifest|--permission-status)
+      --project|--capability|--intent|--dispatch-context|--cli-path|--cli-version|--protocol-version|--runtime-manifest|--permission-status|--persistent-activation)
         [ "$#" -ge 2 ] || { echo "Missing value for doctor option: $1" >&2; return 2; }
         case "$1" in
           --project) project="$2" ;;
@@ -1037,6 +1061,7 @@ run_doctor() {
           --protocol-version) protocol_version="$2" ;;
           --runtime-manifest) runtime_manifest="$2" ;;
           --permission-status) permission_status="$2" ;;
+          --persistent-activation) persistent_activation="$2" ;;
         esac
         shift 2
         ;;
@@ -1044,6 +1069,7 @@ run_doctor() {
     esac
   done
   case "$permission_status" in granted|denied) ;; *) echo "Invalid permission status: $permission_status" >&2; return 2 ;; esac
+  case "$persistent_activation" in confirmed|missing|unknown) ;; *) echo "Invalid persistent activation status: $persistent_activation" >&2; return 2 ;; esac
 
   local zimaflow_home profile_file capability_file
   zimaflow_home="$(find_zimaflow_home)"
@@ -1076,6 +1102,14 @@ EOF
   support_tier="$(yaml_nested_value "$profile_file" "$host" "support_tier")"
   profile_core="$(yaml_nested_value "$profile_file" "core" "logical_skill_ids")"
   if [ "$profile_schema" = "1" ] && [ "$profile_core" = "true" ] && [ -n "$support_tier" ]; then doctor_add_check "host_profile" "passed" "host_profile_resolved"; else doctor_add_check "host_profile" "failed" "host_profile_missing"; doctor_add_gap "host_profile_missing"; fi
+  if [ "$host" = "trae" ]; then
+    if [ "$persistent_activation" = "confirmed" ]; then
+      doctor_add_check "persistent_activation" "passed" "persistent_activation_confirmed"
+    else
+      doctor_add_check "persistent_activation" "failed" "persistent_activation_${persistent_activation}"
+      doctor_add_gap "persistent_activation_unverified"
+    fi
+  fi
 
   local capability_schema capability_protocol capabilities
   capability_schema="$(yaml_top_value "$capability_file" "schema_version")"
@@ -1157,9 +1191,9 @@ state_files() {
   local changes_dir="$root/openspec/changes"
   if [ -d "$changes_dir" ]; then
     {
-      find "$changes_dir" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null
+      find "$changes_dir" -mindepth 2 -maxdepth 3 -path "*/$ZIMAFLOW_STATE_FILE_RELATIVE" ! -path "$changes_dir/archive/*" -type f -print 2>/dev/null
       if [ -d "$changes_dir/archive" ]; then
-        find "$changes_dir/archive" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null
+        find "$changes_dir/archive" -mindepth 2 -maxdepth 3 -path "*/$ZIMAFLOW_STATE_FILE_RELATIVE" -type f -print 2>/dev/null
       fi
     } | sort
   fi
@@ -1178,7 +1212,7 @@ archived_state_matches() {
     [ -n "$change_id" ] || change_id="$(yaml_top_value "$file" "change")"
     [ "$change_id" = "$change" ] && printf '%s\n' "$file"
   done <<EOF
-$(find "$archive_root" -mindepth 2 -maxdepth 2 -name .zimaflow-state.yaml -type f -print 2>/dev/null | sort)
+$(find "$archive_root" -mindepth 2 -maxdepth 3 -path "*/$ZIMAFLOW_STATE_FILE_RELATIVE" -type f -print 2>/dev/null | sort)
 EOF
 }
 
@@ -1217,7 +1251,7 @@ state_record() {
 state_path_for_change() {
   local root="$1"
   local change="$2"
-  printf '%s/openspec/changes/%s/.zimaflow-state.yaml' "$root" "$change"
+  printf '%s/openspec/changes/%s/%s' "$root" "$change" "$ZIMAFLOW_STATE_FILE_RELATIVE"
 }
 
 validate_change_id() {
@@ -2074,7 +2108,7 @@ archive_docs_sync_confirmed() {
 
   while IFS= read -r rel; do
     case "$rel" in
-      openspec/changes/archive/*/.zimaflow-state.yaml)
+      openspec/changes/archive/*/"$ZIMAFLOW_STATE_FILE_RELATIVE")
         state_file="$root/$rel"
         [ -f "$state_file" ] || continue
         found="yes"
@@ -2810,7 +2844,7 @@ run_state() {
   echo
 
   if [ -z "$records" ]; then
-    print_status_line "State files" "none" "No .zimaflow-state.yaml files found under openspec/changes"
+    print_status_line "State files" "none" "No $ZIMAFLOW_STATE_FILE_RELATIVE files found under openspec/changes"
     echo
     echo "Active changes: 0"
     return 0
@@ -4630,6 +4664,15 @@ run_eval() {
   python3 "$helper" "$@"
 }
 
+run_legacy_state() {
+  local helper="$ZIMAFLOW_BIN_DIR/../scripts/legacy-specflow-state.py"
+  if [ ! -f "$helper" ]; then
+    echo "Legacy state migration tooling is unavailable in this runtime." >&2
+    return 2
+  fi
+  python3 "$helper" "$@"
+}
+
 main() {
   case "${1:-}" in
     close)
@@ -4703,6 +4746,9 @@ main() {
       ;;
     execution-input)
       run_execution_input "${2:-}" "${@:3}"
+      ;;
+    legacy-state)
+      run_legacy_state "${@:2}"
       ;;
     eval)
       run_eval "${@:2}"

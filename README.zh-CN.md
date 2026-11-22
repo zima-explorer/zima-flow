@@ -50,7 +50,7 @@ Zimaflow 会先按改动规模选择合适的流程档位：
 
 复杂改动时，Zimaflow 协调 OpenSpec 承接规范与实现工作流；小改动时，则在不引入重流程的前提下守住范围和证据。
 
-![Zimaflow 工作流](assets/zimaflow-workflow.svg)
+![Zimaflow 工作流](assets/zimaflow-workflow.png)
 
 ## 保持轻量
 

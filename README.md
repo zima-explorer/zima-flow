@@ -74,7 +74,7 @@ For complex work, Zimaflow coordinates OpenSpec for the specification and
 implementation workflow. For a small change, it keeps the evidence and scope
 clear without forcing a heavyweight process.
 
-![Zimaflow workflow](assets/zimaflow-workflow.svg)
+![Zimaflow workflow](assets/zimaflow-workflow.png)
 
 ## Keep it lightweight
 

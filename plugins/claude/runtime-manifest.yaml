@@ -1,5 +1,5 @@
 schema_version: 1
 doctor_contract_schema_version: 1
-source_fingerprint: 0558501aac466084b5c13f258c5161b4c4bfd98338d197b80325544c48bd0d4b
+source_fingerprint: e5767b95151280af012b3322fff034fa5bcc58fd74e37eaad1274df9f2fed1c0
 host_id: claude-code
 packaging_mode: plugin

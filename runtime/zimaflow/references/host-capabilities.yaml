@@ -14,6 +14,9 @@ codex:
   packaging_preferred: plugin
   packaging_fallbacks: direct_source
   evidence_url: https://help.openai.com/en/articles/20001256-plugins-in-codex/
+  entry_target: AGENTS.md
+  entry_evidence_status: candidate
+  entry_verification: Start a fresh project session with the Codex plugin enabled and verify that the existing instructions and this entry both load.
 workbuddy:
   support_tier: v1
   evidence_status: local_verified
@@ -25,6 +28,9 @@ workbuddy:
   packaging_preferred: direct_source
   packaging_fallbacks: generated_adapter
   evidence_url: local-environment
+  entry_target: AGENTS.md
+  entry_evidence_status: candidate
+  entry_verification: Start a fresh project session and verify project instruction loading separately from Skill discovery.
 claude-code:
   support_tier: experimental
   evidence_status: official_partial
@@ -36,6 +42,9 @@ claude-code:
   packaging_preferred: plugin
   packaging_fallbacks: symlink,generated_flat_adapter
   evidence_url: https://code.claude.com/docs/en/plugins
+  entry_target: CLAUDE.md
+  entry_evidence_status: candidate
+  entry_verification: Start a fresh project session with the Claude Code plugin enabled and verify that the existing instructions and this entry both load.
 trae:
   support_tier: experimental
   evidence_status: local_partial
@@ -50,3 +59,6 @@ trae:
   context_activation: user_setting_required
   context_setting_evidence: unknown
   evidence_url: local-company-feedback
+  entry_target: .trae/rules/zimaflow-project-entry.md
+  entry_evidence_status: candidate
+  entry_verification: Start a fresh local project session and verify that this entry and the generated workflow rule both appear in the session references.

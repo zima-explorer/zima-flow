@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="1.22.13"
+VERSION="1.22.14"
 ZIMAFLOW_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZIMAFLOW_STATE_FILE_RELATIVE="${ZIMAFLOW_STATE_FILE_RELATIVE:-.zimaflow-state.yaml}"
+ZIMAFLOW_ENTRY_HOST="all"
 
 usage() {
   cat <<'EOF'
@@ -37,6 +38,7 @@ Usage:
   zimaflow reviewer-executor subject-digest|start|transition|resume|record-finding|run-receipt [options]
   zimaflow reviewer-executor receipt-check|coverage-check|mark-implemented|review-ready|review-decision [options]
   zimaflow host-profile <host> [--json]
+  zimaflow host-profile <host> --emit-entry
   zimaflow doctor <host> [--json] [options]
   zimaflow runtime install|upgrade|repair|remove <host> --install-root <temporary-root> [--desired-version VERSION] [--json]
   zimaflow install-hooks [--strict]
@@ -751,9 +753,115 @@ json_csv_array() {
   IFS="$old_ifs"
 }
 
+valid_host_entry_metadata() {
+  local target="$1" status="$2" verification="$3" scope="$4"
+  local prose_pattern='^[[:alnum:]][[:alnum:] .,:()+_-]*$'
+  [[ "$target" =~ ^[[:alnum:]_.-][[:alnum:]_./-]*$ ]] || return 1
+  case "/$target/" in */../*|*/./*|*//*) return 1 ;; esac
+  [[ "$verification" =~ $prose_pattern ]] || return 1
+  case "$status" in
+    candidate) [ -z "$scope" ] ;;
+    local_verified) [[ "$scope" =~ $prose_pattern ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+read_host_entry_metadata() {
+  local profile="$1" host="$2"
+  awk -v host="$host:" '
+    function reject() { invalid = 1; exit 1 }
+    /^[[:space:]]*(#|$)/ { next }
+    /^[^[:space:]]/ {
+      selected = ($1 == host)
+      if (selected && ++sections > 1) reject()
+    }
+    selected && /^[[:space:]]+entry_(target|evidence_status|verification|evidence_scope)[[:space:]]*:/ {
+      if ($0 !~ /^  entry_(target|evidence_status|verification|evidence_scope): +/) reject()
+      key = $1
+      sub(/:$/, "", key)
+      if (key in values) reject()
+      value = $0
+      sub(/^  [^:]+: +/, "", value)
+      sub(/ +$/, "", value)
+      if (value ~ /[[:cntrl:]]/) reject()
+      quote = substr(value, 1, 1)
+      if (quote == "\"" || quote == sprintf("%c", 39)) {
+        if (length(value) < 2 || substr(value, length(value)) != quote) reject()
+        value = substr(value, 2, length(value) - 2)
+      } else if (value ~ /[:][[:space:]]|#/ ||
+                 tolower(value) ~ /^(true|false|null|yes|no|on|off|~)$/ ||
+                 value ~ /^[-+]?[0-9][0-9_.eE+-]*$/) {
+        reject()
+      }
+      values[key] = value
+    }
+    END {
+      if (invalid || !values["entry_target"] || !values["entry_evidence_status"] || !values["entry_verification"]) exit 1
+      printf "%s\t%s\t%s\t%s\n", values["entry_target"], values["entry_evidence_status"], values["entry_verification"], values["entry_evidence_scope"]
+    }
+  ' "$profile"
+}
+
+emit_host_entry() {
+  local host="$1" target="$2" status="$3" verification="$4" scope="$5"
+  local package cli skills
+  case "$host" in
+    codex)
+      package='Use the installed Codex plugin root or the local plugin bundle being tested.'
+      cli='skills/zimaflow/bin/zimaflow'
+      skills='skills/zimaflow/'
+      ;;
+    claude-code)
+      package='Use the installed Claude Code plugin root (`${CLAUDE_PLUGIN_ROOT}`).'
+      cli='bin/zimaflow'
+      skills='runtime/zimaflow/'
+      ;;
+    workbuddy)
+      package='Use the active WorkBuddy direct-source capability root or resolve `shared_runtime_path` relative to its runtime manifest.'
+      cli='bin/zimaflow'
+      skills=''
+      ;;
+    trae)
+      if [ "$ZIMAFLOW_ENTRY_HOST" = "trae" ]; then
+        package='Use the company package root, the directory with `bin/zimaflow`. Use project-relative paths when the package is at the project root.'
+        cli='bin/zimaflow'
+        skills=''
+      else
+        package='Use the installed project adapter root containing `.trae/runtime/zimaflow`.'
+        cli='.trae/runtime/zimaflow/bin/zimaflow'
+        skills='.trae/runtime/zimaflow/'
+      fi
+      ;;
+  esac
+
+  printf '# Zimaflow project entry for %s\n\n' "$host"
+  printf -- '- Add this block to `%s` in the project. Preserve the project instructions already there.\n' "$target"
+  printf -- '- Entry evidence: `%s`. %s\n' "$status" "$verification"
+  if [ -n "$scope" ]; then
+    printf -- '- Evidence scope: %s.\n' "$scope"
+  fi
+  printf -- '- %s Resolve `%s` and the Skill paths below against that package root.\n' "$package" "$cli"
+  if [ "$host" = "trae" ]; then
+    printf '%s\n' '- Verify the entry alongside the project rule `.trae/rules/zimaflow-workflow.md`.'
+  fi
+  printf '%s\n' '- Run the resolved CLI from the consuming project. If it is missing, locate the active package before routing.'
+  printf '%s\n' '- Locate the project with `project show --json` before Start, Continue, or Close. Use its code and docs roots. If uninitialized, follow the existing approval workflow for `project init`.'
+  printf '%s\n' '  If project resolution fails, select the consuming project root and run the command again before routing.'
+  printf -- '- Start: Read `%ssdd-router/SKILL.md` and follow its sizing and approval steps.\n' "$skills"
+  printf -- '- Continue: Run `recall --json`. Read `%shandover-manager/SKILL.md` and follow the current state, handover, and spec.\n' "$skills"
+  printf '%s\n' '  If `no_active_change`, look under the resolved docs root for a matching unfinished handover and read its task evidence.'
+  printf '%s\n' '  If multiple tasks match, ask which one to continue. If none match, start a task when requested or report that nothing is pending.'
+  printf -- '- Close: Read `%ssession-close-reconciler/SKILL.md`. Run `close --json` and follow `next_action`. Confirm closure only on `can_close`.\n' "$skills"
+  printf '%s\n' '- Check activation in a fresh session: confirm that the project rule is referenced and that the agent runs project location before routing. If missing, check the target placement and host rule settings.'
+}
+
 run_host_profile() {
   local host="${1:-}"
   shift || true
+  local option entry_requested=false
+  for option in "$@"; do
+    if [ "$option" = "--emit-entry" ]; then entry_requested=true; fi
+  done
 
   case "$host" in
     codex|workbuddy|claude-code|trae) ;;
@@ -762,26 +870,48 @@ run_host_profile() {
       return 2
       ;;
     *)
-      echo "Unknown host: $host. Available hosts: codex, workbuddy, claude-code, trae" >&2
+      if [ "$entry_requested" = true ]; then
+        echo 'Unknown host for entry emission. Check the host name supported by the selected package.' >&2
+      else
+        echo "Unknown host: $host. Available hosts: codex, workbuddy, claude-code, trae" >&2
+      fi
       return 2
       ;;
   esac
 
   local output_mode="human"
-  if [ "${1:-}" = "--json" ]; then
-    output_mode="json"
-    shift
-  fi
+  case "${1:-}" in
+    --json) output_mode="json"; shift ;;
+    --emit-entry) output_mode="entry"; shift ;;
+  esac
   if [ "$#" -gt 0 ]; then
-    echo "Unknown host-profile option: $1" >&2
+    if [ "$entry_requested" = true ]; then
+      echo 'Invalid host-profile option for entry emission. Use --emit-entry as the only option.' >&2
+    else
+      echo "Unknown host-profile option: $1" >&2
+    fi
     return 2
   fi
 
-  local zimaflow_home profile_file
-  zimaflow_home="$(find_zimaflow_home)"
-  profile_file="$zimaflow_home/references/host-capabilities.yaml"
+  local zimaflow_home profile_file embedded_profile
+  if [ "$output_mode" = "entry" ] && [ "$ZIMAFLOW_ENTRY_HOST" != "all" ] && [ "$host" != "$ZIMAFLOW_ENTRY_HOST" ]; then
+    printf 'Project entry emission is available only for %s in this distribution. Use host-profile %s --emit-entry.\n' \
+      "$ZIMAFLOW_ENTRY_HOST" "$ZIMAFLOW_ENTRY_HOST" >&2
+    return 2
+  fi
+  embedded_profile="$ZIMAFLOW_BIN_DIR/../references/host-capabilities.yaml"
+  if [ "$output_mode" = "entry" ] && [ "$ZIMAFLOW_ENTRY_HOST" != "all" ]; then
+    profile_file="$embedded_profile"
+  else
+    zimaflow_home="$(find_zimaflow_home)"
+    profile_file="$zimaflow_home/references/host-capabilities.yaml"
+  fi
   if [ ! -f "$profile_file" ]; then
-    echo "Host capability profile not found: $profile_file" >&2
+    if [ "$output_mode" = "entry" ]; then
+      echo 'Host capability profile is missing. Check the selected package.' >&2
+    else
+      echo "Host capability profile not found: $profile_file" >&2
+    fi
     return 2
   fi
 
@@ -810,7 +940,11 @@ run_host_profile() {
   context_setting_evidence="$(yaml_nested_value "$profile_file" "$host" "context_setting_evidence")"
 
   if [ "$schema_version" != "1" ]; then
-    echo "Unsupported host capability schema version: ${schema_version:-missing}" >&2
+    if [ "$output_mode" = "entry" ]; then
+      echo 'Unsupported host capability schema version. Check the selected package.' >&2
+    else
+      echo "Unsupported host capability schema version: ${schema_version:-missing}" >&2
+    fi
     return 2
   fi
 
@@ -831,6 +965,29 @@ run_host_profile() {
   if [ "$host" = "trae" ] && { [ -z "$persistent_rules" ] || [ -z "$context_activation" ] || [ -z "$context_setting_evidence" ]; }; then
     echo "Invalid Trae activation profile" >&2
     return 2
+  fi
+
+  local entry_target='' entry_status='' entry_verification='' entry_scope='' entry_valid=false
+  local entry_profile_file="$profile_file" entry_fields
+  if [ "$output_mode" != "human" ] && { [ "$ZIMAFLOW_ENTRY_HOST" = "all" ] || [ "$host" = "$ZIMAFLOW_ENTRY_HOST" ]; }; then
+    if [ "$ZIMAFLOW_ENTRY_HOST" != "all" ]; then
+      entry_profile_file="$embedded_profile"
+    fi
+    if entry_fields="$(read_host_entry_metadata "$entry_profile_file" "$host" 2>/dev/null)"; then
+      IFS=$'\t' read -r entry_target entry_status entry_verification entry_scope <<< "$entry_fields"
+      if valid_host_entry_metadata "$entry_target" "$entry_status" "$entry_verification" "$entry_scope"; then
+        entry_valid=true
+      fi
+    fi
+  fi
+
+  if [ "$output_mode" = "entry" ]; then
+    if [ "$entry_valid" != true ]; then
+      printf 'Missing or invalid entry metadata for %s. Check the host capability profile in the selected package.\n' "$host" >&2
+      return 2
+    fi
+    emit_host_entry "$host" "$entry_target" "$entry_status" "$entry_verification" "$entry_scope"
+    return
   fi
 
   if [ "$output_mode" = "json" ]; then
@@ -861,6 +1018,15 @@ run_host_profile() {
     printf '"host_paths_in_core":'; json_bool_or_string "$host_paths_in_core"
     printf '},'
     printf '"evidence_url":'; json_string "$evidence_url"
+    if [ "$entry_valid" = true ]; then
+      printf ',"entry_injection":{"target":'; json_string "$entry_target"
+      printf ',"evidence_status":'; json_string "$entry_status"
+      printf ',"verification":'; json_string "$entry_verification"
+      if [ -n "$entry_scope" ]; then
+        printf ',"evidence_scope":'; json_string "$entry_scope"
+      fi
+      printf '}'
+    fi
     printf '}\n'
     return 0
   fi

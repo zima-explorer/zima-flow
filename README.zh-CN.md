@@ -21,7 +21,13 @@ AI Coding 让实现变快，但需求边界、关键决策、验证结果和上�
 
 Zimaflow 不是 AI 编程 agent，不是项目管理系统，也不是个人工作区的镜像。它与 Claude Code、Codex 和 WorkBuddy 配合，为已有的编码能力补上一条可靠的工程流程。
 
-## 1.22.13 有什么更新
+## 1.22.14 有什么更新
+
+Zimaflow 为共用 CLI 工作流增加了简短的项目入口。`host-profile --emit-entry`
+输出适合对应宿主的 Markdown 指令块，用于开始任务、续接交接和收尾。指令块给出
+规则文件位置以及在新会话确认加载的方法。
+
+### 此前版本
 
 Zimaflow 1.22.13 新增一等 Trae 项目包与安全的旧状态迁移：
 
@@ -52,7 +58,7 @@ Zimaflow 会先按改动规模选择合适的流程档位：
 
 ## 快速开始
 
-先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.13。
+先安装你所使用宿主的 CLI。本仓库包含 Zimaflow 1.22.14。
 
 Claude Code：
 
@@ -67,6 +73,18 @@ Codex：
 codex plugin marketplace add zima-explorer/zima-flow
 codex plugin add zimaflow@zimaflow
 ```
+
+### 加入项目入口
+
+在公开发行仓的 checkout 中为所用宿主生成入口：
+
+```sh
+./runtime/zimaflow/bin/zimaflow host-profile codex --emit-entry
+```
+
+宿主名可用 `codex`、`claude-code`、`workbuddy` 或 `trae`。命令将指令块打印到
+标准输出。将它合入输出指定的项目规则文件，并保留项目原有指令。Trae 需要配合已生成的
+Trae 项目适配器使用。开启新会话，按指令块中的验证步骤确认宿主已加载入口。
 
 ## 受限网络
 
@@ -124,7 +142,7 @@ release manifest 用于验证不可变发行 payload。请 checkout 要验证的
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.13
+git checkout v1.22.14
 ./verify-release.sh --distribution .
 ```
 

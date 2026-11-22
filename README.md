@@ -30,7 +30,14 @@ Zimaflow is not an AI coding agent, a project-management system, or a copy of
 your personal workspace. It works with Claude Code, Codex, and WorkBuddy to
 give their coding capabilities a reliable engineering process.
 
-## What's new in 1.22.13
+## What's new in 1.22.14
+
+Zimaflow adds a short project entry point for its shared CLI workflow.
+`host-profile --emit-entry` prints a host-specific Markdown block for starting
+a task, resuming a handover, or closing a session. The block identifies its rule
+file and explains how to confirm loading in a fresh session.
+
+### Earlier releases
 
 Zimaflow 1.22.13 adds first-class Trae project packaging and safe legacy-state
 migration:
@@ -46,7 +53,7 @@ migration:
 - The public package remains the complete cross-host distribution, including
   state, recall, drift-check, release-check, and session-close capabilities.
 
-Earlier releases also include reviewer–executor retrospectives, Golden-case Evals, prototype review with human acceptance, and high-risk handoff prompts for a human maintainer.
+Other releases include reviewer–executor retrospectives, Golden-case Evals, prototype review with human acceptance, and high-risk handoff prompts for a human maintainer.
 
 ## How it works
 
@@ -79,7 +86,7 @@ every task into a compliance ceremony.
 ## Quick start
 
 Install the CLI for the host you use before adding Zimaflow. This checkout
-contains Zimaflow 1.22.13.
+contains Zimaflow 1.22.14.
 
 Claude Code:
 
@@ -94,6 +101,20 @@ Codex:
 codex plugin marketplace add zima-explorer/zima-flow
 codex plugin add zimaflow@zimaflow
 ```
+
+### Add a project entry
+
+From the public distribution checkout, generate an entry for your host:
+
+```sh
+./runtime/zimaflow/bin/zimaflow host-profile codex --emit-entry
+```
+
+Use `codex`, `claude-code`, `workbuddy`, or `trae` as the host name. The command
+prints the block to standard output. Merge it into the project rule file named
+in the output and keep the project's existing instructions. For Trae, use it
+alongside the generated Trae project adapter. Open a fresh session and follow
+the verification instructions in the block to confirm the host loaded it.
 
 ## Restricted networks
 
@@ -173,7 +194,7 @@ changes. For this release:
 ```sh
 git clone https://github.com/zima-explorer/zima-flow.git
 cd zima-flow
-git checkout v1.22.13
+git checkout v1.22.14
 ./verify-release.sh --distribution .
 ```
 
